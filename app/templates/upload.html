@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="card">
+    <h2><i class="mdi mdi-upload"></i> Upload New Member File</h2>
+    <p>Accepts <code>.xlsx</code>, <code>.xls</code> or <code>.csv</code>.</p>
+
+    <form method="post" enctype="multipart/form-data">
+      <div class="file-input-wrapper">
+        <button type="button" class="btn primary">
+          <i class="mdi mdi-file-document-outline"></i> Choose File
+        </button>
+        <input id="file-upload"
+               name="file"
+               type="file"
+               class="file-input"
+               accept=".xlsx,.xls,.csv"
+               onchange="document.getElementById('file-name').textContent = this.files[0]?.name || 'No file chosen'">
+      </div>
+      <span id="file-name" class="file-name">No file chosen</span>
+
+      <div style="margin: 1rem 0;">
+        <label style="display: flex; align-items: center; gap: 0.5rem;">
+          <input type="checkbox" name="clear_previous" style="transform: scale(1.2);">
+          <span>Clear previous submissions before processing this file</span>
+        </label>
+        <small style="color: var(--muted); display: block; margin-top: 0.25rem;">
+          Check this if you want to remove old data and start fresh with this upload
+        </small>
+      </div>
+
+      <button type="submit" class="btn primary" style="margin-left:1rem;">
+        <i class="mdi mdi-cloud-upload"></i> Upload &amp; Process
+      </button>
+    </form>
+  </div>
+{% endblock %}

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="d-flex align-items-center mb-4">
+    <h2><i class="mdi mdi-clipboard-list-outline"></i> Review Matches</h2>
+    <form method="post" action="{{ url_for('main.cancel_review') }}" style="margin-left:auto;">
+      <button type="submit" class="btn primary">
+        <i class="mdi mdi-close-circle-outline"></i>
+        Cancel &amp; Start Over
+      </button>
+    </form>
+  </div>
+
+  {% if pending_reviews %}
+    <!-- Batch Actions -->
+    <div style="display:flex; gap:1rem; margin-bottom:2rem;">
+      <form method="post" action="{{ url_for('main.batch_save_decisions') }}">
+        <button type="submit" class="btn accent">
+          <i class="mdi mdi-content-save-all"></i>
+          Save All Decisions
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('main.batch_ignore_all') }}">
+        <button type="submit" class="btn" style="color:#e85a5a; border-color:#e85a5a;">
+          <i class="mdi mdi-trash-can-outline"></i>
+          Ignore All
+        </button>
+      </form>
+    </div>
+    <!-- /Batch Actions -->
+
+    {% for review in pending_reviews %}
+      <div class="card mb-4">
+        <div style="display:flex; align-items:center;">
+          <h3 class="card-title" style="margin-right:1rem;">
+            “{{ review.new_item.name }}”
+          </h3>
+          <span class="type-label {{ review.new_item.type|lower }}">
+            {{ review.new_item.type|capitalize }}
+          </span>
+        </div>
+        <p class="card-text">
+          Select the best match from your canonical data, mark as new, or ignore this item:
+        </p>
+        <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+              method="post" style="margin-bottom:.5rem;">
+          <ul class="radio-list">
+            <!-- Top suggestion -->
+            <li>
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="{{ review.suggested_ext_id }}">
+                <strong>{{ review.suggested_name }}</strong>
+                <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
+              </label>
+            </li>
+            <!-- Alternatives -->
+            {% for alt in review.alternatives %}
+            <li style="padding-left:1.5rem;">
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="{{ alt.ext_id }}">
+                {{ alt.name }}
+                <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
+              </label>
+            </li>
+            {% endfor %}
+            <!-- New / no match -->
+            <li>
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="__new__"
+                       checked>
+                <em>→ New / No match in canonical data</em>
+              </label>
+            </li>
+          </ul>
+          <button type="submit" class="btn accent">
+            <i class="mdi mdi-content-save"></i>
+            Save Decision
+          </button>
+        </form>
+        <form action="{{ url_for('main.ignore_review_item', item_id=review.new_item_id) }}" method="post">
+          <button type="submit" class="btn" style="color:#e85a5a; border-color:#e85a5a; background:none; margin-top:.3rem;">
+            <i class="mdi mdi-trash-can-outline"></i> Ignore / Remove this item
+          </button>
+        </form>
+      </div>
+    {% endfor %}
+  {% else %}
+    {# Once done, include the "done" partial #}
+    {% include "reviews_done.html" %}
+  {% endif %}
+{% endblock %}

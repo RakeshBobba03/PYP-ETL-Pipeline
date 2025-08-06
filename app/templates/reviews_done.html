@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if val_errors %}
+  <div class="card" style="background:#381a1a;color:#ff5858;margin-bottom:2em;">
+    <h3>Some rows had validation errors and were skipped:</h3>
+    <ul>
+      {% for err in val_errors %}
+        <li>Row {{ err.row }}: {{ err.error }}</li>
+      {% endfor %}
+    </ul>
+    <a href="{{ url_for('main.download_etl_errors') }}" class="btn accent">Download Error Report</a>
+  </div>
+{% endif %}
+
+  <div class="card text-center mb-4">
+    <h2><i class="mdi mdi-check-circle-outline"></i> All Reviews Completed</h2>
+
+    {% if new_items_to_add %}
+      <p class="mb-3" style="color: var(--muted); text-align:left;">
+        The following <strong>new</strong> items will be pushed to Dgraph:
+      </p>
+      <ul style="list-style: disc; padding-left:2rem; text-align:left; margin-bottom:2rem;">
+        {% for it in new_items_to_add %}
+          <li style="font-size:1.15em; margin-bottom:.4rem;">
+            {{ it.name }} <span class="muted">({{ it.type }})</span>
+          </li>
+        {% endfor %}
+      </ul>
+      <form action="{{ url_for('main.push_to_dgraph') }}" method="post" style="margin-bottom:2rem;">
+        <button type="submit" class="btn primary" style="width:16rem; font-size:1.15em;">
+          <i class="mdi mdi-rocket-launch"></i>
+          Push to Dgraph
+        </button>
+      </form>
+    {% else %}
+      <p><em>Nothing new to add—every submission matched an existing record.</em></p>
+    {% endif %}
+
+    {# Collapsible for matched items, placed after Push to Dgraph #}
+    {% if matched_items and matched_items|length > 0 %}
+      <div style="margin-bottom:2rem; text-align:left;">
+        <button type="button"
+                class="btn accent"
+                onclick="document.getElementById('matched-collapse').classList.toggle('show');"
+                style="width:16rem; font-size:1.05em;">
+          <i class="mdi mdi-check-decagram"></i>
+          Show Matched Items
+        </button>
+        <div id="matched-collapse" style="display:none; background: #171717; padding:1rem; border-radius:4px; margin-top:.5rem;">
+          <h3 style="margin-bottom:1rem; color:var(--primary);">Successfully Matched Items</h3>
+          <ul style="list-style:disc; padding-left:1.5rem;">
+            {% for m in matched_items %}
+              <li style="margin-bottom:.3em;">
+                {{ m.original_name }} ({{ m.type }}) →
+                {{ m.matched_name }}
+                {% if m.score is not none %}
+                  (<strong>{{ "%.2f"|format(m.score) }}%</strong>)
+                {% endif %}
+                <span style="color:#8fb339;">[{{ m.matched_to }}]</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+      <script>
+        document.querySelector('.btn.accent').addEventListener('click', function(){
+          var el = document.getElementById('matched-collapse');
+          el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        });
+      </script>
+    {% endif %}
+
+    <div style="margin-top:2rem;">
+      <a href="{{ url_for('main.upload_file') }}" class="btn accent" style="width:16rem; font-size:1.1em;">
+        <i class="mdi mdi-arrow-left"></i>
+        Back to Upload
+      </a>
+    </div>
+  </div>
+{% endblock %}
