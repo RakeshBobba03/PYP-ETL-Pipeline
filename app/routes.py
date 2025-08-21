@@ -290,6 +290,33 @@ def batch_save_decisions():
     current_app.logger.info(f"[batch_save_decisions] Batch review decisions saved for {len(reviews)} items as NEW items.")
     return redirect(url_for('main.review_list'))
 
+@main_bp.route('/reviews/batch_approve_high_confidence', methods=['POST'])
+def batch_approve_high_confidence():
+    """Auto-approve items with high confidence matches (90%+)"""
+    high_confidence_reviews = MatchReview.query.join(NewItem) \
+        .filter(
+            MatchReview.approved.is_(None), 
+            NewItem.ignored.is_(False),
+            MatchReview.score >= 90.0,
+            MatchReview.suggested_ext_id.isnot(None)
+        ).all()
+    
+    current_app.logger.info(f"[batch_approve_high_confidence] Auto-approving {len(high_confidence_reviews)} high confidence items")
+    
+    approved_count = 0
+    for review in high_confidence_reviews:
+        review.approved = True
+        review.new_item.resolved = True
+        review.new_item.matched_canonical_id = review.suggested_ext_id
+        db.session.add(review)
+        db.session.add(review.new_item)
+        approved_count += 1
+
+    db.session.commit()
+    flash(f"Auto-approved {approved_count} high confidence items (90%+ match).", "success")
+    current_app.logger.info(f"[batch_approve_high_confidence] Auto-approved {approved_count} high confidence items.")
+    return redirect(url_for('main.review_list'))
+
 @main_bp.route('/reviews/batch_ignore_all', methods=['POST'])
 def batch_ignore_all():
     pending = MatchReview.query.join(NewItem) \
@@ -324,15 +351,86 @@ def push_to_dgraph():
     current_app.logger.info(f"[push] Found {len(members)} member record(s) to process")
 
     results = {"members": [], "products": [], "ingredients": [], "errors": []}
+    
+
+    
+    # Load valid countries from schema (listallcountries.json represents the schema)
+    def load_valid_countries_from_schema():
+        """Load all valid countries from the schema definition"""
+        try:
+            with open('listallcountries.json', 'r') as f:
+                data = json.load(f)
+                countries = data.get('data', {}).get('queryMemberCountry', [])
+                return {country['title']: country['countryID'] for country in countries}
+        except Exception as e:
+            current_app.logger.warning(f"[push] Could not load valid countries from schema: {e}")
+            return {}
+    
+    # Load valid countries from schema
+    valid_countries_schema = load_valid_countries_from_schema()
+    current_app.logger.info(f"[push] Loaded {len(valid_countries_schema)} valid countries from schema")
+    
+    # Cache for country lookups to avoid repeated queries
+    country_cache = {}
+    
+    def create_country_if_missing(country_name):
+        """Create a country if it's valid but doesn't exist in Dgraph"""
+        try:
+            # Try to create the country
+            mut = """
+            mutation ($in: [AddMemberCountryInput!]!) {
+              addMemberCountry(input: $in) {
+                memberCountry { countryID title }
+              }
+            }
+            """
+            v = {"in": [{"title": country_name}]}
+            resp = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
+            resp_json = resp.json()
+            
+            if "errors" in resp_json:
+                error_msg = resp_json["errors"][0].get("message", "Unknown Dgraph error")
+                current_app.logger.error(f"[push] Failed to create country '{country_name}': {error_msg}")
+                return None
+                
+            data = resp_json.get("data", {})
+            if data and data.get("addMemberCountry", {}).get("memberCountry"):
+                country = data["addMemberCountry"]["memberCountry"][0]
+                current_app.logger.info(f"[push] Created new country '{country_name}' with ID: {country['countryID']}")
+                return {"countryID": country["countryID"]}
+            else:
+                current_app.logger.error(f"[push] Unexpected response creating country '{country_name}': {resp_json}")
+                return None
+                
+        except Exception as e:
+            current_app.logger.error(f"[push] Exception creating country '{country_name}': {e}")
+            return None
 
     def lookup_ref(ref_type_query, var_name, title, id_field):
-        q = f'''
-        query ($title: String!) {{
-          {ref_type_query}(filter: {{title: {{eq: $title}}}}) {{
-            {id_field}
-          }}
-        }}
-        '''
+        # For countries, check cache first
+        if ref_type_query == "queryMemberCountry":
+            cache_key = f"country_{title}"
+            if cache_key in country_cache:
+                current_app.logger.debug(f"[push] Found country '{title}' in cache")
+                return country_cache[cache_key]
+        
+        # For countries, use the correct GraphQL query format
+        if ref_type_query == "queryMemberCountry":
+            q = f'''
+            query ($title: String!) {{
+              queryMemberCountry(filter: {{title: {{eq: $title}}}}) {{
+                {id_field}
+              }}
+            }}
+            '''
+        else:
+            q = f'''
+            query ($title: String!) {{
+              {ref_type_query}(filter: {{title: {{eq: $title}}}}) {{
+                {id_field}
+              }}
+            }}
+            '''
         current_app.logger.info(f"[push] Looking up {ref_type_query} for title='{title}' ({id_field})")
         try:
             resp = dgraph_request_with_retry(url, {"query": q, "variables": {"title": title}}, headers=headers)
@@ -359,43 +457,21 @@ def push_to_dgraph():
                 return None
                 
             current_app.logger.info(f"[push] Found {id_field} for '{title}': {result_list[0][id_field]}")
-            return {id_field: result_list[0][id_field]}
+            result = {id_field: result_list[0][id_field]}
+            
+            # Cache country results
+            if ref_type_query == "queryMemberCountry":
+                cache_key = f"country_{title}"
+                country_cache[cache_key] = result
+                current_app.logger.debug(f"[push] Cached country '{title}' result")
+            
+            return result
             
         except Exception as e:
             current_app.logger.error(f"[push] Error for {ref_type_query}: {e}")
             return None
 
-    def create_country_if_missing(country_name):
-        """Create a country if it doesn't exist"""
-        try:
-            # Try to create the country
-            mut = """
-            mutation ($in: [AddMemberCountryInput!]!) {
-              addMemberCountry(input: $in) {
-                country { countryID title }
-              }
-            }
-            """
-            v = {"in": [{"title": country_name}]}
-            resp = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-            resp_json = resp.json()
-            
-            if "errors" in resp_json:
-                current_app.logger.error(f"[push] Failed to create country '{country_name}': {resp_json['errors']}")
-                return None
-                
-            data = resp_json.get("data", {})
-            if data and data.get("addMemberCountry", {}).get("country"):
-                country = data["addMemberCountry"]["country"][0]
-                current_app.logger.info(f"[push] Created new country '{country_name}' with ID: {country['countryID']}")
-                return {"countryID": country["countryID"]}
-            else:
-                current_app.logger.error(f"[push] Unexpected response creating country '{country_name}': {resp_json}")
-                return None
-                
-        except Exception as e:
-            current_app.logger.error(f"[push] Exception creating country '{country_name}': {e}")
-            return None
+
 
     # --- Begin atomic block per company ---
     for m in members:
@@ -407,15 +483,26 @@ def push_to_dgraph():
                 results["errors"].append(f"Missing country for business '{biz}'—skipped.")
                 current_app.logger.warning(f"[push] Skipping '{biz}' due to missing country.")
                 continue
+            # Step 1: Check if country is valid according to schema
+            if m.country1 not in valid_countries_schema:
+                results["errors"].append(f"Country '{m.country1}' is not a valid country in the schema for business '{biz}'—skipped.")
+                current_app.logger.warning(f"[push] Skipping '{biz}' due to invalid country '{m.country1}'")
+                continue
+            
+            # Step 2: Check if country exists in Dgraph
             country_ref = lookup_ref("queryMemberCountry", "country", m.country1, "countryID")
             if not country_ref:
-                # Try to create the country if it doesn't exist
-                current_app.logger.info(f"[push] Country '{m.country1}' not found, attempting to create it...")
+                # Step 3: Create the country if it's valid but doesn't exist
+                current_app.logger.info(f"[push] Country '{m.country1}' is valid but doesn't exist in Dgraph, creating it...")
                 country_ref = create_country_if_missing(m.country1)
                 if not country_ref:
-                    results["errors"].append(f"Failed to create country '{m.country1}' for business '{biz}'—skipped.")
+                    results["errors"].append(f"Failed to create valid country '{m.country1}' for business '{biz}'—skipped.")
                     current_app.logger.warning(f"[push] Skipping '{biz}' due to failed country creation '{m.country1}'")
                     continue
+                else:
+                    current_app.logger.info(f"[push] Successfully created country '{m.country1}' in Dgraph")
+            else:
+                current_app.logger.info(f"[push] Found existing country '{m.country1}' in Dgraph")
 
             # Lookup in Dgraph for possible upsert
             q = """
@@ -504,16 +591,26 @@ def push_to_dgraph():
             if hasattr(m, 'state1') and m.state1:
                 state_ref = lookup_ref("queryMemberStateOrProvince", "state", m.state1, "stateOrProvinceID")
 
+            # Build member input with validation to ensure no None values
             member_input = {
                 "businessName":   biz,
-                "contactEmail":   m.contact_email,
-                "streetAddress1": m.street_address1,
-                "city1":          m.city1,
-                "companyBio":     m.company_bio,
-                "products":       [{"title": t} for t in subs_ps],
-                "ingredients":    [{"title": t} for t in subs_is],
                 "country1":       country_ref,
+                "streetAddress1": m.street_address1 if (m.street_address1 and m.street_address1.strip()) else "Not provided",  # Required field
             }
+            
+            # Only add optional fields if they have valid values
+            if m.contact_email and m.contact_email.strip():
+                member_input["contactEmail"] = m.contact_email
+            if m.city1 and m.city1.strip():
+                member_input["city1"] = m.city1
+            if m.company_bio and m.company_bio.strip():
+                member_input["companyBio"] = m.company_bio
+                
+            # Add products and ingredients only if they exist
+            if subs_ps:
+                member_input["products"] = [{"title": t} for t in subs_ps]
+            if subs_is:
+                member_input["ingredients"] = [{"title": t} for t in subs_is]
             if state_ref:
                 member_input["stateOrProvince1"] = state_ref
             if hasattr(m, 'zip_code1') and m.zip_code1:
@@ -526,6 +623,7 @@ def push_to_dgraph():
               }
             }
             """
+            current_app.logger.info(f"[push] Member input for '{biz}': {member_input}")
             r = requests.post(
                 url,
                 json={"query": mut, "variables": {"in": [member_input]}},
@@ -536,12 +634,33 @@ def push_to_dgraph():
             if arr:
                 results["members"].extend(arr)
                 current_app.logger.info(f"[push] Created new member '{biz}' in Dgraph")
+                
+                # Add newly created products and ingredients to results for reporting
+                if subs_ps:
+                    for product_name in subs_ps:
+                        results["products"].append({
+                            "title": product_name,
+                            "productID": f"new_product_{len(results['products'])}",
+                            "note": f"Created with member '{biz}'"
+                        })
+                    current_app.logger.info(f"[push] Added {len(subs_ps)} new products to results for '{biz}'")
+                
+                if subs_is:
+                    for ingredient_name in subs_is:
+                        results["ingredients"].append({
+                            "title": ingredient_name,
+                            "ingredientID": f"new_ingredient_{len(results['ingredients'])}",
+                            "note": f"Created with member '{biz}'"
+                        })
+                    current_app.logger.info(f"[push] Added {len(subs_is)} new ingredients to results for '{biz}'")
             else:
                 err = resp_json.get("errors", [{"message": "Unknown Dgraph error"}])
+                error_msg = err[0].get('message', 'Unknown Dgraph error')
                 results["errors"].append(
-                    f"Failed to create '{biz}': {err[0].get('message')}"
+                    f"Failed to create '{biz}': {error_msg}"
                 )
-                current_app.logger.warning(f"[push] Failed to create '{biz}': {err[0].get('message')}")
+                current_app.logger.warning(f"[push] Failed to create '{biz}': {error_msg}")
+                current_app.logger.warning(f"[push] Full response: {resp_json}")
         except Exception as ex:
             current_app.logger.warning(f"[push] Atomic rollback: failed to push '{biz}': {ex}")
             results["errors"].append(

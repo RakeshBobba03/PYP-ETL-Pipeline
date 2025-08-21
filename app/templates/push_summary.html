@@ -47,7 +47,15 @@
         {% if products %}
           <ul style="list-style:disc inside; margin-bottom:1.5rem;">
             {% for p in products %}
-              <li>{{ p.title }} &rarr; <code>{{ p.productID or p.uid }}</code></li>
+              <li>
+                {{ p.title }}
+                {% if p.note %}
+                  <small style="color: #888;">({{ p.note }})</small>
+                {% endif %}
+                {% if p.productID and not p.productID.startswith('new_product_') %}
+                  &rarr; <code>{{ p.productID }}</code>
+                {% endif %}
+              </li>
             {% endfor %}
           </ul>
         {% else %}
@@ -60,7 +68,15 @@
         {% if ingredients %}
           <ul style="list-style:disc inside; margin-bottom:1.5rem;">
             {% for i in ingredients %}
-              <li>{{ i.title }} &rarr; <code>{{ i.ingredientID or i.uid }}</code></li>
+              <li>
+                {{ i.title }}
+                {% if i.note %}
+                  <small style="color: #888;">({{ i.note }})</small>
+                {% endif %}
+                {% if i.ingredientID and not i.ingredientID.startswith('new_ingredient_') %}
+                  &rarr; <code>{{ i.ingredientID }}</code>
+                {% endif %}
+              </li>
             {% endfor %}
           </ul>
         {% else %}

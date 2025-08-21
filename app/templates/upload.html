@@ -2,23 +2,48 @@
 {% block content %}
   <div class="card">
     <h2><i class="mdi mdi-upload"></i> Upload New Member File</h2>
-    <p>Accepts <code>.xlsx</code>, <code>.xls</code> or <code>.csv</code>.</p>
+    <p>Accepts <code>.xlsx</code>, <code>.xls</code> or <code>.csv</code> files for PYP member data processing.</p>
 
     <form method="post" enctype="multipart/form-data" id="upload-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       
+      <!-- Drag & Drop Zone -->
       <div class="file-upload-section">
+        <div id="drag-drop-zone" class="drag-drop-zone">
+          <div class="drag-drop-content">
+            <i class="mdi mdi-cloud-upload" style="font-size: 3rem; color: var(--accent); margin-bottom: 1rem;"></i>
+            <h3>Drag & Drop your file here</h3>
+            <p>or</p>
+            <button type="button" class="btn primary" onclick="document.getElementById('file-input').click()">
+              <i class="mdi mdi-file-document-outline"></i> Choose File
+            </button>
+            <p class="file-types">Supports: .xlsx, .xls, .csv</p>
+          </div>
+        </div>
+        
         <input type="file" 
                name="file" 
                id="file-input"
                accept=".xlsx,.xls,.csv" 
                style="display: none;">
-        <button type="button" 
-                class="btn primary" 
-                onclick="document.getElementById('file-input').click()">
-          <i class="mdi mdi-file-document-outline"></i> Choose File
-        </button>
-        <span id="file-name" style="margin-left: 1rem; color: var(--muted); font-style: italic;">No file chosen</span>
+        
+        <!-- File Info Display -->
+        <div id="file-info" class="file-info" style="display: none;">
+          <div class="file-details">
+            <i class="mdi mdi-file-document" style="color: var(--accent);"></i>
+            <span id="file-name">No file chosen</span>
+            <button type="button" class="btn-remove" onclick="removeFile()">
+              <i class="mdi mdi-close"></i>
+            </button>
+          </div>
+          <div id="file-preview" class="file-preview"></div>
+        </div>
+      </div>
+
+      <!-- Data Quality Check -->
+      <div id="data-quality-check" class="data-quality-check" style="display: none;">
+        <h4><i class="mdi mdi-check-circle"></i> Data Quality Check</h4>
+        <div id="quality-results"></div>
       </div>
 
       <div style="margin: 1rem 0;">
@@ -31,7 +56,7 @@
         </small>
       </div>
 
-      <button type="submit" class="btn primary" style="margin-left:1rem;" id="upload-btn">
+      <button type="submit" class="btn primary" style="margin-left:1rem;" id="upload-btn" disabled>
         <i class="mdi mdi-cloud-upload"></i> Upload &amp; Process
       </button>
     </form>
@@ -42,24 +67,128 @@
         <div class="progress-fill" id="progress-fill"></div>
       </div>
       <p id="progress-text">Processing file...</p>
+      <div id="progress-details" class="progress-details"></div>
     </div>
   </div>
 
   <script>
-    // File input change handler
-    document.getElementById('file-input').addEventListener('change', function(e) {
-      const fileName = e.target.files[0]?.name || 'No file chosen';
-      document.getElementById('file-name').textContent = fileName;
+    // Drag & Drop functionality
+    const dragDropZone = document.getElementById('drag-drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileInfo = document.getElementById('file-info');
+    const filePreview = document.getElementById('file-preview');
+    const uploadBtn = document.getElementById('upload-btn');
+    const dataQualityCheck = document.getElementById('data-quality-check');
+    const qualityResults = document.getElementById('quality-results');
+
+    // Drag and drop event handlers
+    dragDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dragDropZone.classList.add('drag-over');
     });
+
+    dragDropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragDropZone.classList.remove('drag-over');
+    });
+
+    dragDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragDropZone.classList.remove('drag-over');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        fileInput.files = files;
+        handleFileSelect(files[0]);
+      }
+    });
+
+    // File input change handler
+    fileInput.addEventListener('change', function(e) {
+      if (e.target.files[0]) {
+        handleFileSelect(e.target.files[0]);
+      }
+    });
+
+    function handleFileSelect(file) {
+      if (!file) return;
+      
+      // Show file info
+      document.getElementById('file-name').textContent = file.name;
+      fileInfo.style.display = 'block';
+      dragDropZone.style.display = 'none';
+      
+      // Enable upload button
+      uploadBtn.disabled = false;
+      
+      // Preview file contents
+      previewFile(file);
+      
+      // Check data quality
+      checkDataQuality(file);
+    }
+
+    function removeFile() {
+      fileInput.value = '';
+      fileInfo.style.display = 'none';
+      dragDropZone.style.display = 'block';
+      filePreview.innerHTML = '';
+      dataQualityCheck.style.display = 'none';
+      uploadBtn.disabled = true;
+    }
+
+    function previewFile(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        if (file.type.includes('csv') || file.name.endsWith('.csv')) {
+          previewCSV(e.target.result);
+        } else if (file.type.includes('spreadsheet') || file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+          previewExcel(e.target.result);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function previewCSV(content) {
+      const lines = content.split('\n').slice(0, 6); // Show first 5 rows + header
+      const preview = lines.map(line => `<div class="preview-row">${line}</div>`).join('');
+      filePreview.innerHTML = `
+        <div class="preview-header">File Preview (first 5 rows):</div>
+        <div class="preview-content">${preview}</div>
+      `;
+    }
+
+    function previewExcel(content) {
+      filePreview.innerHTML = `
+        <div class="preview-header">Excel file detected</div>
+        <div class="preview-content">File size: ${(fileInput.files[0].size / 1024).toFixed(1)} KB</div>
+      `;
+    }
+
+    function checkDataQuality(file) {
+      // Basic file quality checks
+      const checks = [];
+      
+      if (file.size > 10 * 1024 * 1024) { // 10MB
+        checks.push({ type: 'warning', message: 'Large file detected - processing may take longer' });
+      }
+      
+      if (file.size < 100) {
+        checks.push({ type: 'error', message: 'File appears to be empty or very small' });
+      }
+      
+      if (checks.length > 0) {
+        qualityResults.innerHTML = checks.map(check => 
+          `<div class="quality-item ${check.type}">
+            <i class="mdi mdi-${check.type === 'error' ? 'alert-circle' : 'information'}"></i>
+            ${check.message}
+          </div>`
+        ).join('');
+        dataQualityCheck.style.display = 'block';
+      }
+    }
 
     // Form submission handler
     document.getElementById('upload-form').addEventListener('submit', function(e) {
-      const fileInput = document.getElementById('file-input');
-      const uploadBtn = document.getElementById('upload-btn');
-      const progressContainer = document.getElementById('progress-container');
-      const progressFill = document.getElementById('progress-fill');
-      const progressText = document.getElementById('progress-text');
-      
       if (!fileInput.files[0]) {
         e.preventDefault();
         alert('Please select a file first.');
@@ -69,15 +198,15 @@
       // Show progress indicator
       uploadBtn.disabled = true;
       uploadBtn.innerHTML = '<i class="mdi mdi-loading mdi-spin"></i> Processing...';
-      progressContainer.style.display = 'block';
+      document.getElementById('progress-container').style.display = 'block';
       
       // Simulate progress (since we can't track actual ETL progress)
       let progress = 0;
       const interval = setInterval(() => {
         progress += Math.random() * 15;
         if (progress > 90) progress = 90;
-        progressFill.style.width = progress + '%';
-        progressText.textContent = `Processing file... ${Math.round(progress)}%`;
+        document.getElementById('progress-fill').style.width = progress + '%';
+        document.getElementById('progress-text').textContent = `Processing file... ${Math.round(progress)}%`;
       }, 500);
       
       // Store interval ID to clear it later
@@ -86,10 +215,119 @@
   </script>
 
   <style>
-    .file-upload-section {
+    .drag-drop-zone {
+      border: 2px dashed var(--accent);
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      transition: all 0.3s ease;
       margin: 1rem 0;
+      background: rgba(139, 179, 57, 0.05);
+    }
+    
+    .drag-drop-zone.drag-over {
+      border-color: var(--primary);
+      background: rgba(139, 179, 57, 0.1);
+      transform: scale(1.02);
+    }
+    
+    .drag-drop-content h3 {
+      margin: 0 0 0.5rem 0;
+      color: var(--text);
+    }
+    
+    .file-types {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+    
+    .file-info {
+      margin: 1rem 0;
+      padding: 1rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    
+    .file-details {
       display: flex;
       align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    
+    .btn-remove {
+      background: none;
+      border: none;
+      color: var(--danger);
+      cursor: pointer;
+      padding: 0.25rem;
+      border-radius: 4px;
+      margin-left: auto;
+    }
+    
+    .btn-remove:hover {
+      background: rgba(232, 90, 90, 0.1);
+    }
+    
+    .file-preview {
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+    }
+    
+    .preview-header {
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      color: var(--text);
+    }
+    
+    .preview-content {
+      background: var(--bg);
+      padding: 0.5rem;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .preview-row {
+      padding: 0.25rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .data-quality-check {
+      margin: 1rem 0;
+      padding: 1rem;
+      background: rgba(139, 179, 57, 0.1);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+    }
+    
+    .data-quality-check h4 {
+      margin: 0 0 1rem 0;
+      color: var(--accent);
+    }
+    
+    .quality-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      margin-bottom: 0.5rem;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    
+    .quality-item.error {
+      background: rgba(232, 90, 90, 0.1);
+      color: var(--danger);
+    }
+    
+    .quality-item.warning {
+      background: rgba(255, 193, 7, 0.1);
+      color: #ffc107;
     }
     
     .progress-bar {
@@ -106,6 +344,12 @@
       background-color: var(--accent);
       width: 0%;
       transition: width 0.3s ease;
+    }
+    
+    .progress-details {
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: var(--muted);
     }
     
     #upload-btn:disabled {
