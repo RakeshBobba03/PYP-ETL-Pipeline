@@ -1,0 +1,78 @@
+{# app/templates/push_summary.html #}
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="container" style="max-width:700px; margin-top:2rem;">
+
+    {# ─── Errors Card ──────────────────────────────────────────────── #}
+    {% if errors %}
+      <div class="card" style="border-color: #d9534f; padding:1rem; margin-bottom:2rem;">
+        <h2 style="color:#d9534f; margin-bottom:1rem;">Errors</h2>
+        <ul style="list-style:disc inside; color:#f2dede;">
+          {% for err in errors %}
+            <li style="margin:.5rem 0;">{{ err }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="card" style="padding:2rem; text-align:center;">
+
+      <h1 style="margin-bottom:1rem;">
+        Pushed to Dgraph
+      </h1>
+
+      <p style="margin-bottom:2rem;">
+        Submission <strong>{{ submission.name }}</strong>
+      </p>
+
+      <div style="text-align:left; margin:0 auto; max-width:600px;">
+
+        <h2>
+          Members <small>({{ members|length }})</small>
+        </h2>
+        {% if members %}
+          <ul style="list-style:disc inside; margin-bottom:1.5rem;">
+            {% for m in members %}
+              <li>{{ m.businessName }} &rarr; <code>{{ m.memberID or m.uid }}</code></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p><em>No new members created.</em></p>
+        {% endif %}
+
+        <h2>
+          Products <small>({{ products|length }})</small>
+        </h2>
+        {% if products %}
+          <ul style="list-style:disc inside; margin-bottom:1.5rem;">
+            {% for p in products %}
+              <li>{{ p.title }} &rarr; <code>{{ p.productID or p.uid }}</code></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p><em>No new products created.</em></p>
+        {% endif %}
+
+        <h2>
+          Ingredients <small>({{ ingredients|length }})</small>
+        </h2>
+        {% if ingredients %}
+          <ul style="list-style:disc inside; margin-bottom:1.5rem;">
+            {% for i in ingredients %}
+              <li>{{ i.title }} &rarr; <code>{{ i.ingredientID or i.uid }}</code></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p><em>No new ingredients created.</em></p>
+        {% endif %}
+
+      </div>
+
+      <a href="{{ url_for('main.upload_file') }}" class="btn accent" style="margin-top:2rem;">
+        <i class="mdi mdi-arrow-left"></i> Back to Upload
+      </a>
+
+    </div>
+  </div>
+{% endblock %}

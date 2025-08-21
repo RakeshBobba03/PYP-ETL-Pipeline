@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="card" style="background:#381a1a;color:#ff5858;margin-bottom:2em;">
+    <h2>ETL Validation Errors for {{ submission }}</h2>
+    <table style="width:100%;margin-bottom:1.5em;">
+      <thead><tr><th>Row</th><th>Error</th></tr></thead>
+      <tbody>
+        {% for e in errors %}
+          <tr>
+            <td>{{ e.row }}</td>
+            <td>{{ e.error }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <a href="{{ url_for('main.download_errors', filename=error_filename) }}" class="btn accent">Download Error Report</a>
+    <a href="{{ url_for('main.upload_file') }}" class="btn accent">Back to Upload</a>
+  </div>
+{% endblock %}

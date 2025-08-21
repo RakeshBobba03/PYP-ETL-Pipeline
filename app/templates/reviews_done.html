@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if val_errors %}
+  <div class="card" style="background:#381a1a;color:#ff5858;margin-bottom:2em;">
+    <h3>Some rows had validation errors and were skipped:</h3>
+    <ul>
+      {% for err in val_errors %}
+        <li>Row {{ err.row }}: {{ err.error }}</li>
+      {% endfor %}
+    </ul>
+    <a href="{{ url_for('main.download_etl_errors') }}" class="btn accent">Download Error Report</a>
+  </div>
+{% endif %}
+
+  <div class="card text-center mb-4">
+    <h2><i class="mdi mdi-check-circle-outline"></i> All Reviews Completed</h2>
+
+    {% if new_items_approved %}
+      <div style="background: rgba(139, 179, 57, 0.1); padding: 1.5rem; border-radius: 6px; border: 2px solid var(--accent); margin-bottom: 2rem; text-align: left;">
+        <h3 style="color: var(--accent); margin: 0 0 1rem 0;">
+          <i class="mdi mdi-rocket-launch"></i> Ready to Push Data
+        </h3>
+        <p style="margin: 0 0 1rem 0; color: var(--text); line-height: 1.5;">
+          <strong>What will be pushed:</strong> The following items will be processed and sent to your database. 
+          Businesses are created automatically during file processing, while products and ingredients are reviewed and approved by you.
+        </p>
+        
+        <!-- Data Summary Grid -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+          <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 4px; border-left: 3px solid var(--primary);">
+            <h4 style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1rem;">
+              <i class="mdi mdi-domain"></i> Businesses (Auto-Created)
+            </h4>
+            <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+              <strong>{{ new_items_approved|map(attribute='member')|map(attribute='name')|unique|list|length }}</strong> business{{ 'es' if (new_items_approved|map(attribute='member')|map(attribute='name')|unique|list|length) != 1 else '' }} created during ETL
+            </p>
+          </div>
+          
+          <div style="background: rgba(139, 179, 57, 0.1); padding: 1rem; border-radius: 4px; border-left: 3px solid var(--accent);">
+            <h4 style="color: var(--accent); margin: 0 0 0.5rem 0; font-size: 1rem;">
+              <i class="mdi mdi-package-variant"></i> New Products
+            </h4>
+            <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+              <strong>{{ new_items_approved|selectattr('type', 'equalto', 'product')|list|length }}</strong> new product{{ 's' if (new_items_approved|selectattr('type', 'equalto', 'product')|list|length) != 1 else '' }}
+            </p>
+          </div>
+          
+          <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 4px; border-left: 3px solid var(--primary);">
+            <h4 style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1rem;">
+              <i class="mdi mdi-food-apple"></i> New Ingredients
+            </h4>
+            <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+              <strong>{{ new_items_approved|selectattr('type', 'equalto', 'ingredient')|list|length }}</strong> new ingredient{{ 's' if (new_items_approved|selectattr('type', 'equalto', 'ingredient')|list|length) != 1 else '' }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detailed Item Breakdown -->
+      <div style="text-align: left; margin-bottom: 2rem;">
+        <h3 style="color: var(--primary); margin-bottom: 1rem;">
+          <i class="mdi mdi-format-list-bulleted"></i> Detailed Breakdown
+        </h3>
+        
+        <!-- Businesses -->
+        {% set businesses = new_items_approved|map(attribute='member')|map(attribute='name')|unique|list %}
+        {% if businesses %}
+        <div style="margin-bottom: 1.5rem;">
+          <h4 style="color: var(--primary); margin-bottom: 0.5rem;">
+            <i class="mdi mdi-domain"></i> Businesses Created During ETL
+          </h4>
+          <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 0.5rem;">
+            These businesses were automatically created when you uploaded the file:
+          </p>
+          <ul style="list-style: disc; padding-left: 1.5rem; margin: 0;">
+            {% for business_name in businesses %}
+              <li style="margin-bottom: 0.3rem; color: var(--text);">
+                <strong>{{ business_name }}</strong>
+                <span style="color: var(--muted); font-size: 0.9rem;">
+                  (auto-created from submission)
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        
+        <!-- Products -->
+        {% set products = new_items_approved|selectattr('type', 'equalto', 'product')|list %}
+        {% if products %}
+        <div style="margin-bottom: 1.5rem;">
+          <h4 style="color: var(--accent); margin-bottom: 0.5rem;">
+            <i class="mdi mdi-package-variant"></i> New Products to Create
+          </h4>
+          <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 0.5rem;">
+            These products were reviewed and approved by you:
+          </p>
+          <ul style="list-style: disc; padding-left: 1.5rem; margin: 0;">
+            {% for item in products %}
+              <li style="margin-bottom: 0.3rem; color: var(--text);">
+                <strong>{{ item.name }}</strong>
+                <span style="color: var(--muted); font-size: 0.9rem;">
+                  (business: {{ item.member.name }})
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+        
+        <!-- Ingredients -->
+        {% set ingredients = new_items_approved|selectattr('type', 'equalto', 'ingredient')|list %}
+        {% if ingredients %}
+        <div style="margin-bottom: 1.5rem;">
+          <h4 style="color: var(--primary); margin-bottom: 0.5rem;">
+            <i class="mdi mdi-food-apple"></i> New Ingredients to Create
+          </h4>
+          <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 0.5rem;">
+            These ingredients were reviewed and approved by you:
+          </p>
+          <ul style="list-style: disc; padding-left: 1.5rem; margin: 0;">
+            {% for item in ingredients %}
+              <li style="margin-bottom: 0.3rem; color: var(--text);">
+                <strong>{{ item.name }}</strong>
+                <span style="color: var(--muted); font-size: 0.9rem;">
+                  (business: {{ item.member.name }})
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+      
+      <form action="{{ url_for('main.push_to_dgraph') }}" method="post" style="margin-bottom:2rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn primary" style="width:16rem; font-size:1.15em;">
+          <i class="mdi mdi-rocket-launch"></i>
+          Push Data
+        </button>
+      </form>
+      
+      <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 4px; border-left: 3px solid var(--primary); text-align: left; margin-bottom: 2rem;">
+        <h4 style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1rem;">
+          <i class="mdi mdi-information-outline"></i> What Happens Next
+        </h4>
+        <p style="margin: 0; color: var(--text); font-size: 0.9rem; line-height: 1.4;">
+          <strong>Businesses:</strong> Already created during file processing - no additional action needed<br>
+          <strong>Products & Ingredients:</strong> Will be created as new records and linked to their businesses<br>
+          <strong>Relationships:</strong> Each product/ingredient will establish proper connections to its business<br>
+          <strong>Data Structure:</strong> Items will be stored with all properties and establish proper relationships<br>
+          <strong>Error Handling:</strong> Any failures will be logged and reported back to you
+        </p>
+      </div>
+    {% else %}
+      <p><em>No new items were approved during review—every submission matched an existing record or was ignored.</em></p>
+    {% endif %}
+
+    {# Collapsible for matched items, placed after Push to Dgraph #}
+    {% if matched_items and matched_items|length > 0 %}
+      <div style="margin-bottom:2rem; text-align:left;">
+        <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 4px; margin-bottom: 1rem; border-left: 3px solid var(--primary);">
+          <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+            <strong>💡 Matched Items:</strong> These items were automatically linked to existing canonical data during processing. 
+            They don't need to be created as new records since they already exist in your system.
+          </p>
+        </div>
+        
+        <button type="button"
+                class="btn accent"
+                onclick="document.getElementById('matched-collapse').classList.toggle('show');"
+                style="width:16rem; font-size:1.05em;">
+          <i class="mdi mdi-check-decagram"></i>
+          Show Matched Items
+        </button>
+        <div id="matched-collapse" style="display:none; background: #171717; padding:1rem; border-radius:4px; margin-top:.5rem; border: 1px solid var(--accent);">
+          <h3 style="margin-bottom:1rem; color:var(--primary);">
+            <i class="mdi mdi-check-decagram"></i> Successfully Matched Items
+          </h3>
+          <p style="color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem;">
+            These items were automatically matched to existing canonical data during processing:
+          </p>
+          <ul style="list-style:disc; padding-left:1.5rem; margin: 0;">
+            {% for m in matched_items %}
+              <li style="margin-bottom:.5em; color: var(--text); line-height: 1.4;">
+                <strong style="color: var(--primary);">{{ m.name }}</strong> 
+                <span style="color: var(--muted);">({{ m.type|capitalize }})</span> →
+                {% if m.matched_canonical_id %}
+                  <strong style="color: var(--accent);">Matched to Canonical ID</strong>
+                  <span style="color: var(--primary); font-size: 0.8rem; background: rgba(212, 175, 55, 0.1); padding: 0.2rem 0.4rem; border-radius: 3px;">ID: {{ m.matched_canonical_id[:12] }}...</span>
+                {% else %}
+                  <em style="color: var(--muted);">No canonical ID set</em>
+                {% endif %}
+                {% if m.score is not none %}
+                  <span style="color: var(--accent); font-weight: bold;">({{ "%.2f"|format(m.score) }}%)</span>
+                {% endif %}
+              </li>
+            {% else %}
+              <li style="color: var(--muted); font-style: italic;">
+                No items were automatically matched during processing.
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+      <script>
+        document.querySelector('.btn.accent').addEventListener('click', function(){
+          var el = document.getElementById('matched-collapse');
+          el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        });
+      </script>
+    {% endif %}
+
+    <div style="margin-top:2rem;">
+      <a href="{{ url_for('main.upload_file') }}" class="btn accent" style="width:16rem; font-size:1.1em;">
+        <i class="mdi mdi-arrow-left"></i>
+        Back to Upload
+      </a>
+    </div>
+  </div>
+{% endblock %}

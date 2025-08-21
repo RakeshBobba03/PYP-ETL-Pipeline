@@ -1,0 +1,203 @@
+# Certifications
+
+type Certification {
+  certID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  abbr: String @search(by: [term, fulltext, hash])
+
+  members: [Member] @hasInverse(field: certifications)
+
+  description: String
+
+  groups: [CertificationGroup] @hasInverse(field: certifications)
+}
+
+# Products and Ingredients
+
+type Product {
+  productID: ID!
+
+  title: String! @id @search(by: [term, fulltext])
+
+  manufacturers: [Member] @hasInverse(field: products)
+
+  suppliers: [Member] @hasInverse(field: supplies)
+
+  timesSearched: Int @search
+
+  embedding: [Float!] @embedding @search(by: ["hnsw"])
+}
+
+type Ingredients {
+  ingredientID: ID!
+
+  title: String! @search(by: [term, fulltext])
+
+  suppliers: [Member] @hasInverse(field: ingredients)
+
+  timesSearched: Int @search
+}
+
+# Services (Capabilities)
+
+interface Capabilities {
+  serviceID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+
+  abbr: String @search(by: [hash])
+}
+
+type ManufacturingServices implements Capabilities {
+  members: [Member] @hasInverse(field: manufacturingServices)
+}
+
+type LogisticalServices implements Capabilities {
+  members: [Member] @hasInverse(field: logisticalServices)
+}
+
+type LaboratoryServices implements Capabilities {
+  members: [Member] @hasInverse(field: laboratoryServices)
+}
+
+type DesignServices implements Capabilities {
+  members: [Member] @hasInverse(field: designServices)
+}
+
+type MarketingServices implements Capabilities {
+  members: [Member] @hasInverse(field: marketingServices)
+}
+
+type StartupFriendlyServices implements Capabilities {
+  members: [Member] @hasInverse(field: startupFriendlyServices)
+}
+
+type RegulatoryServices implements Capabilities {
+  members: [Member] @hasInverse(field: regulatoryServices)
+}
+
+type LegalServices implements Capabilities {
+  members: [Member] @hasInverse(field: legalServices)
+}
+
+type SustainabilityServices implements Capabilities {
+  members: [Member] @hasInverse(field: sustainabilityServices)
+}
+
+type ConsultingServices implements Capabilities {
+  members: [Member] @hasInverse(field: consultingServices)
+}
+
+type SpacesServices implements Capabilities {
+  members: [Member] @hasInverse(field: spacesServices)
+}
+
+# Characteristics
+
+interface Characteristic {
+  charID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+}
+
+type BusinessDetail implements Characteristic {
+  members: [Member] @hasInverse(field: businessDetails)
+}
+
+type Sustainability implements Characteristic {
+  members: [Member] @hasInverse(field: sustainability)
+}
+
+type Allergen implements Characteristic {
+  members: [Member] @hasInverse(field: allergens)
+}
+
+type FacilityDetails implements Characteristic {
+  members: [Member] @hasInverse(field: facilityDetails)
+}
+
+# Packaging Materials
+
+interface PackagingMaterials {
+  packagingID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+}
+
+type DeliveredInPackaging implements PackagingMaterials {
+  members: [Member] @hasInverse(field: deliveredIn)
+}
+
+type SuppliedPackaging implements PackagingMaterials {
+  members: [Member] @hasInverse(field: suppliedPackaging)
+}
+
+# Circular Materials
+
+interface CircularMaterials {
+  ingredientID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+}
+
+type ByProduct implements CircularMaterials {
+  members: [Member] @hasInverse(field: byProducts)
+}
+
+type UpCycledIngredients implements CircularMaterials {
+  members: [Member] @hasInverse(field: upCycledIngredients)
+}
+
+# Equipment
+
+interface Equipment {
+  equipmentID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  category: String @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+}
+
+type SuppliedEquipment implements Equipment {
+  members: [Member] @hasInverse(field: suppliedEquipment)
+}
+
+type FacilityEquipment implements Equipment {
+  members: [Member] @hasInverse(field: facilityEquipment)
+}
+
+# Space Characteristics
+
+interface SpacesCharacteristics {
+  charID: ID!
+
+  title: String! @search(by: [term, fulltext, hash])
+
+  description: String @search(by: [fulltext])
+
+  category: String @search(by: [term, fulltext, hash])
+}
+
+type FacilityAmenities implements SpacesCharacteristics {
+  members: [Member] @hasInverse(field: facilityAmenities)
+}
+
+type TypeOfSpace implements SpacesCharacteristics {
+  members: [Member] @hasInverse(field: typeOfSpace)
+}
+
+type TypeOfAgreement implements SpacesCharacteristics {
+  members: [Member] @hasInverse(field: typeOfAgreement)
+}

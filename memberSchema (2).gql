@@ -1,0 +1,201 @@
+type Member {
+  memberID: ID!
+  businessName: String! @search(by: [term, fulltext, regexp, exact])
+  contactFullName: String
+  firstName: String @search(by: [term, fulltext, regexp, exact])
+  lastName: String @search(by: [term, fulltext, regexp, exact])
+  contactEmail: String! @id @search(by: [exact, regexp])
+  phone: String
+  website: String
+  linkedinURL: String
+  facebookURL: String
+  instagramURL: String
+  twitterURL: String
+  youtubeURL: String
+  membershipStatus: Membership @search(by: [regexp, hash]) 
+  multipleLocations: Boolean
+  streetAddress1: String! @search(by: [fulltext, exact])
+  city1: String! @search(by: [fulltext, exact])
+  stateOrProvince1: MemberStateOrProvince
+  country1: MemberCountry!
+  zipCode1: String @search
+  memberOfferings: [MemberOffering]
+  certifications: [Certification]
+  products: [Product]
+  supplies: [Product] #depredtesd
+  ingredients: [Ingredients]
+  services: [Service] #deprecated
+  manufacturingServices: [ManufacturingServices]
+  consultingServices: [ConsultingServices]
+  regulatoryServices: [RegulatoryServices]
+  startupFriendlyServices: [StartupFriendlyServices]
+  sustainabilityServices: [SustainabilityServices]
+  legalServices: [LegalServices]
+  designServices: [DesignServices]
+  marketingServices: [MarketingServices]
+  logisticalServices: [LogisticalServices]
+  laboratoryServices: [LaboratoryServices]
+  spacesServices: [SpacesServices]
+  allergens: [Allergen]
+  businessDetails: [BusinessDetail]
+  facilityDetails: [FacilityDetails]
+  facilityAmenities: [FacilityAmenities]
+  typeOfSpace: [TypeOfSpace]
+  typeOfAgreement: [TypeOfAgreement]
+  deliveredIn: [DeliveredInPackaging]
+  suppliedPackaging: [SuppliedPackaging]
+  suppliedEquipment: [SuppliedEquipment]
+  facilityEquipment: [FacilityEquipment]
+  byProducts: [ByProduct]
+  upCycledIngredients: [UpCycledIngredients]
+  networkStatus: NetworkStatus @search(by: [regexp, hash])
+  companyBio: String! @search(by: [fulltext, term])
+  idealClient: String @search(by: [fulltext, term])
+  moq: String
+  readyToStartNow: Boolean @search
+  bookingProjectsForMonth: String
+  bookingProjectsForYear: Int
+  leadTimes: LeadTime
+  membershipStatus: Membership @search(by: [regexp, hash])
+  firebaseUID: String @search(by: [exact])
+  createdAt: DateTime @search(by: [month])
+  updatedAt: DateTime @search(by: [month])
+  networkStatus: NetworkStatus @search(by: [regexp, hash])
+}
+
+type MemberStateOrProvince {
+  stateOrProvinceID: ID!
+  title: String! @id @search(by: [term, fulltext])
+  country: MemberCountry @hasInverse(field: states)
+  isTerritory: Boolean @search
+  alternateName: String @search #full state name for US states
+}
+
+type MemberCountry {
+  countryID: ID!
+  title: String! @id @search(by: [term, fulltext])
+  states: [MemberStateOrProvince] @hasInverse(field: country)
+}
+
+type Product {
+  productID: ID!
+  title: String! @id @search(by: [term, fulltext])
+  manufacturers: [Member] @hasInverse(field: products)
+  suppliers: [Member] @hasInverse(field: supplies)
+  timesSearched: Int @search
+  embedding: [Float!] @embedding @search(by: ["hnsw"])
+}
+
+type Ingredients {
+  ingredientID: ID!
+  title: String! @search(by: [term, fulltext])
+  suppliers: [Member] @hasInverse(field: ingredients)
+  timesSearched: Int @search
+}
+
+type CertificationGroup {
+  certGroupID: ID!
+  title: String! @id @search(by: [term, fulltext])
+  description: String
+  certifications: [Certification] @hasInverse(field: groups)
+}
+
+type Certification {
+  certID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+  abbr: String @search(by: [term, fulltext, hash])
+  members: [Member] @hasInverse(field: certifications)
+  description: String
+  groups: [CertificationGroup] @hasInverse(field: certifications)
+}
+
+type Service {
+  serviceID: ID!
+  title: String! @id @search(by: [term, fulltext, hash])
+}
+
+type MemberOffering {
+  offeringID: ID!
+  title: String! @search
+}
+
+type Allergen {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type BusinessDetail {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type FacilityDetails {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type FacilityAmenities {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type TypeOfSpace {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type TypeOfAgreement {
+  charID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type DeliveredInPackaging {
+  packagingID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type SuppliedPackaging {
+  packagingID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type SuppliedEquipment {
+  equipmentID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type FacilityEquipment {
+  equipmentID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type ByProduct {
+  ingredientID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type UpCycledIngredients {
+  ingredientID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+type LeadTime {
+  leadTimeID: ID!
+  title: String! @search(by: [term, fulltext, hash])
+}
+
+enum Membership {
+  FREE_SEARCH_USER
+  PAID_SEARCH_USER
+  LEGACY_MEMBER
+  LIFETIME
+  DEACTIVATED
+  MONTHLY_TIER_ONE_MEMBER
+  ANNUAL_TIER_ONE_MEMBER
+}
+
+enum NetworkStatus {
+  IN_NETWORK
+  OUT_OF_NETWORK
+  IN_PROGRESS
+}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="d-flex align-items-center mb-4">
+    <h2><i class="mdi mdi-clipboard-list-outline"></i> Review Matches</h2>
+    <form method="post" action="{{ url_for('main.cancel_review') }}" style="margin-left:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn primary">
+        <i class="mdi mdi-close-circle-outline"></i>
+        Cancel &amp; Start Over
+      </button>
+    </form>
+  </div>
+
+  <div style="margin-bottom: 2rem;">
+    <h2 style="margin-bottom: 1rem; color: var(--text);">
+      <i class="mdi mdi-clipboard-check-outline"></i>
+      Product & Ingredient Match Review
+    </h2>
+
+    <!-- Dgraph Information -->
+    <div style="background: rgba(139, 179, 57, 0.1); padding: 1rem; border-radius: 4px; border: 1px solid var(--accent);">
+      <h4 style="color: var(--accent); margin: 0 0 0.5rem 0; font-size: 1rem;">
+        <i class="mdi mdi-information-outline"></i> Review Process
+      </h4>
+      <p style="margin: 0; color: var(--text); font-size: 0.9rem; line-height: 1.4;">
+        <strong>What you're reviewing:</strong> Products and ingredients from your uploaded file that need to be matched to existing records or marked as new.
+        <br><br>
+        <strong>Businesses:</strong> Are automatically created during file processing and don't require review.
+        <br><br>
+        <strong>Your choices:</strong> For each product/ingredient, approve a match to link to existing data, or mark as "new" to create a new record. 
+        After completing all reviews, you can push the approved decisions to your database.
+      </p>
+    </div>
+  </div>
+
+    <!-- Batch Actions -->
+    <div style="background: rgba(139, 179, 57, 0.1); padding: 1rem; border-radius: 4px; margin-bottom: 1rem; border: 1px solid var(--accent);">
+      <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+        <strong>💡 Batch Actions:</strong> 
+        "Save All as New Items" will approve all pending reviews as new products/ingredients (default selection). 
+        "Ignore All" will skip all items. 
+        You can also review each item individually below.
+      </p>
+    </div>
+    
+    <div style="display:flex; gap:1rem; margin-bottom:2rem;">
+      <form method="post" action="{{ url_for('main.batch_save_decisions') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn accent">
+          <i class="mdi mdi-content-save-all"></i>
+          Save All as New Items
+        </button>
+      </form>
+      <form method="post" action="{{ url_for('main.batch_ignore_all') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn" style="color:#e85a5a; border-color:#e85a5a;">
+          <i class="mdi mdi-trash-can-outline"></i>
+          Ignore All
+        </button>
+      </form>
+    </div>
+    <!-- /Batch Actions -->
+
+    {% for review in pending_reviews %}
+      <div class="card mb-4">
+        <div style="display:flex; align-items:center;">
+          <h3 class="card-title" style="margin-right:1rem;">
+            "{{ review.new_item.name }}"
+          </h3>
+          <span class="type-label {{ review.new_item.type|lower }}">
+            {{ review.new_item.type|capitalize }}
+          </span>
+        </div>
+        
+        <!-- Item Context -->
+        <div style="background: rgba(212, 175, 55, 0.1); padding: 0.75rem; border-radius: 4px; margin-bottom: 1rem; border-left: 3px solid var(--primary);">
+          <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+            <strong>Source:</strong> {{ review.new_item.submission.name if review.new_item.submission else 'Unknown' }} | 
+            <strong>Type:</strong> {{ review.new_item.type|capitalize }} | 
+            <strong>Confidence:</strong> {{ "%.1f"|format(review.score) if review.score else 'N/A' }}%
+          </p>
+        </div>
+
+        <p class="card-text">
+          Select the best match from your canonical data, mark as new, or ignore this item:
+        </p>
+        
+        <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+              method="post" style="margin-bottom:.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <ul class="radio-list">
+            <!-- Top suggestion -->
+            {% if review.suggested_ext_id %}
+            <li>
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="{{ review.suggested_ext_id }}">
+                <strong>{{ review.suggested_name }}</strong>
+                <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
+                <span style="color: var(--accent); font-size: 0.8rem;">← Best Match</span>
+              </label>
+            </li>
+            {% endif %}
+            
+            <!-- Alternatives -->
+            {% for alt in review.alternatives %}
+            <li style="padding-left:1.5rem;">
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="{{ alt.ext_id }}">
+                {{ alt.name }}
+                <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
+              </label>
+            </li>
+            {% endfor %}
+            
+            <!-- New / no match -->
+            <li>
+              <label>
+                <input type="radio"
+                       name="choice"
+                       value="__new__"
+                       checked>
+                <em>→ New / No match in canonical data</em>
+                <span style="color: var(--primary); font-size: 0.8rem;">← Will create new {{ review.new_item.type }} in Dgraph</span>
+              </label>
+            </li>
+          </ul>
+          
+          <button type="submit" class="btn accent">
+            <i class="mdi mdi-content-save"></i>
+            Save Decision
+          </button>
+        </form>
+        
+        <form action="{{ url_for('main.ignore_review_item', item_id=review.new_item_id) }}" method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn" style="color:#e85a5a; border-color:#e85a5a; background:none; margin-top:.3rem;">
+            <i class="mdi mdi-trash-can-outline"></i> Ignore / Remove this item
+          </button>
+        </form>
+      </div>
+    {% endfor %}
+{% endblock %}

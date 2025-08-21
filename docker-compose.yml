@@ -1,0 +1,47 @@
+version: "3.9"
+services:
+  web:
+    build: .
+    # Map host 5001 → container 5001 (your Flask now listens on 5001)
+    ports:
+      - "5001:5001"
+    environment:
+      FLASK_ENV: development
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DGRAPH_URL: ${DGRAPH_URL}
+      DGRAPH_API_TOKEN: ${DGRAPH_API_TOKEN}
+      # New configurable thresholds
+      FUZZY_MATCH_THRESHOLD: ${FUZZY_MATCH_THRESHOLD:-80.0}
+      AUTO_RESOLVE_THRESHOLD: ${AUTO_RESOLVE_THRESHOLD:-95.0}
+    depends_on:
+      - db
+    # Security improvements
+    read_only: false
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  db:
+    image: postgres:14
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Security improvements
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+
+volumes:
+  db_data:
