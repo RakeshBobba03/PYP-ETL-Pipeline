@@ -5,6 +5,7 @@ import csv
 import requests
 import logging
 import time
+import json
 from pathlib import Path
 from flask import (
     Blueprint, render_template, request, redirect,
@@ -342,9 +343,27 @@ def push_to_dgraph():
         flash("No submission found to push.", "warning")
         return redirect(url_for('main.upload_file'))
 
-    url   = current_app.config['DGRAPH_URL']
-    token = current_app.config['DGRAPH_API_TOKEN']
+    url   = current_app.config.get('DGRAPH_URL')
+    token = current_app.config.get('DGRAPH_API_TOKEN')
+    
+    # Check if Dgraph is configured
+    if not url or not token:
+        current_app.logger.error("[push] Dgraph not configured - cannot push data")
+        flash("Dgraph is not configured. Please set DGRAPH_URL and DGRAPH_API_TOKEN environment variables.", "error")
+        return redirect(url_for('main.review_list'))
+    
     headers = {"Content-Type": "application/json", "Dg-Auth": token}
+    
+    # Test Dgraph connectivity first
+    try:
+        test_query = {"query": "query { __schema { types { name } } }"}
+        test_resp = requests.post(url, json=test_query, headers=headers, timeout=5)
+        test_resp.raise_for_status()
+        current_app.logger.info("[push] Dgraph connectivity test successful")
+    except Exception as e:
+        current_app.logger.error(f"[push] Dgraph connectivity test failed: {e}")
+        flash(f"Dgraph is not accessible: {str(e)}. Please check your Dgraph instance and daily limits.", "error")
+        return redirect(url_for('main.review_list'))
 
     current_app.logger.info(f"[push] Starting push for submission: {submission.name}")
     members = Member.query.filter_by(submission_id=submission.id).all()
@@ -404,6 +423,9 @@ def push_to_dgraph():
                 
         except Exception as e:
             current_app.logger.error(f"[push] Exception creating country '{country_name}': {e}")
+            # Check if it's a daily limit error
+            if "daily limit" in str(e).lower():
+                return {"error": f"Daily limit reached: {e}"}
             return None
 
     def lookup_ref(ref_type_query, var_name, title, id_field):
@@ -440,7 +462,8 @@ def push_to_dgraph():
             if "errors" in resp_json:
                 error_msg = resp_json["errors"][0].get("message", "Unknown Dgraph error")
                 current_app.logger.error(f"[push] Dgraph query error for {ref_type_query}: {error_msg}")
-                return None
+                # Return a special value to indicate Dgraph error vs "not found"
+                return {"error": error_msg}
                 
             data = resp_json.get("data", {})
             if not data:
@@ -469,7 +492,7 @@ def push_to_dgraph():
             
         except Exception as e:
             current_app.logger.error(f"[push] Error for {ref_type_query}: {e}")
-            return None
+            return {"error": str(e)}
 
 
 
@@ -491,16 +514,28 @@ def push_to_dgraph():
             
             # Step 2: Check if country exists in Dgraph
             country_ref = lookup_ref("queryMemberCountry", "country", m.country1, "countryID")
-            if not country_ref:
-                # Step 3: Create the country if it's valid but doesn't exist
-                current_app.logger.info(f"[push] Country '{m.country1}' is valid but doesn't exist in Dgraph, creating it...")
+            if country_ref is None:
+                # Country not found in Dgraph - try to create it
+                current_app.logger.info(f"[push] Country '{m.country1}' not found in Dgraph, attempting to create...")
                 country_ref = create_country_if_missing(m.country1)
                 if not country_ref:
-                    results["errors"].append(f"Failed to create valid country '{m.country1}' for business '{biz}'—skipped.")
+                    results["errors"].append(f"Failed to create country '{m.country1}' for business '{biz}'—skipped.")
                     current_app.logger.warning(f"[push] Skipping '{biz}' due to failed country creation '{m.country1}'")
+                    continue
+                elif isinstance(country_ref, dict) and "error" in country_ref:
+                    # Dgraph error occurred during creation
+                    error_msg = country_ref["error"]
+                    results["errors"].append(f"Dgraph error creating country '{m.country1}': {error_msg} - business '{biz}' skipped.")
+                    current_app.logger.warning(f"[push] Skipping '{biz}' due to Dgraph error creating country '{m.country1}': {error_msg}")
                     continue
                 else:
                     current_app.logger.info(f"[push] Successfully created country '{m.country1}' in Dgraph")
+            elif isinstance(country_ref, dict) and "error" in country_ref:
+                # Dgraph error occurred (e.g., daily limit reached)
+                error_msg = country_ref["error"]
+                results["errors"].append(f"Dgraph error for country '{m.country1}': {error_msg} - business '{biz}' skipped.")
+                current_app.logger.warning(f"[push] Skipping '{biz}' due to Dgraph error for country '{m.country1}': {error_msg}")
+                continue
             else:
                 current_app.logger.info(f"[push] Found existing country '{m.country1}' in Dgraph")
 

@@ -195,23 +195,29 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
 
     current_app.logger.info(f"[etl] Starting processing (columns: {headers})")
 
-    url   = current_app.config['DGRAPH_URL']
-    token = current_app.config['DGRAPH_API_TOKEN']
-    gql = """
-    query {
-      products: queryProduct { title productID }
-      ingredients: queryIngredients { title ingredientID }
-    }
-    """
-    try:
-        current_app.logger.info("[etl] Fetching canonical products/ingredients from Dgraph…")
-        resp = requests.post(url, json={"query": gql}, headers={"Content-Type": "application/json", "Dg-Auth": token}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-        current_app.logger.info(f"[etl] Canonical products: {len(data.get('products',[]))}, ingredients: {len(data.get('ingredients',[]))}")
-    except Exception as e:
-        current_app.logger.error(f"[etl] Could not fetch canonical: {e}")
+    url   = current_app.config.get('DGRAPH_URL')
+    token = current_app.config.get('DGRAPH_API_TOKEN')
+    
+    # Handle case where Dgraph is not configured
+    if not url or not token:
+        current_app.logger.warning("[etl] Dgraph not configured - skipping canonical data fetch")
         data = {}
+    else:
+        gql = """
+        query {
+          products: queryProduct { title productID }
+          ingredients: queryIngredients { title ingredientID }
+        }
+        """
+        try:
+            current_app.logger.info("[etl] Fetching canonical products/ingredients from Dgraph…")
+            resp = requests.post(url, json={"query": gql}, headers={"Content-Type": "application/json", "Dg-Auth": token}, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            current_app.logger.info(f"[etl] Canonical products: {len(data.get('products',[]))}, ingredients: {len(data.get('ingredients',[]))}")
+        except Exception as e:
+            current_app.logger.error(f"[etl] Could not fetch canonical: {e}")
+            data = {}
 
     prod_map   = {p['title']: p['productID']   for p in data.get("products", [])}
     ing_map    = {i['title']: i['ingredientID'] for i in data.get("ingredients", [])}

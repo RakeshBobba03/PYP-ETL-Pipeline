@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}PYP ETL Pipeline{% endblock %}</title>
+    <title>{% block title %}Food Forest AI - ETL Pipeline{% endblock %}</title>
     
     <!-- Material Design Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/css/materialdesignicons.min.css">
@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/toasts.css') }}">
     
     <!-- Favicon -->
-    <link rel="icon" type="image/x-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/company-logo.png') }}">
     
     {% block extra_head %}{% endblock %}
 </head>
@@ -22,8 +22,7 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <i class="mdi mdi-rocket-launch"></i>
-                <span>PYP ETL Pipeline</span>
+                <img src="{{ url_for('static', filename='images/company-logo.png') }}" alt="Company Logo" class="company-logo">
             </div>
             
             <div class="nav-menu">
@@ -76,12 +75,12 @@
         <div class="container">
             <div class="footer-content">
                 <div class="footer-info">
-                    <span>&copy; 2024 PYP Company. ETL Pipeline v2.0</span>
+                    <span>&copy; Pick Your Packer LLC</span>
                 </div>
                 <div class="footer-links">
+                    <a href="https://www.foodforest.ai" class="footer-link" target="_blank" rel="noopener">Food Forest AI</a>
                     <a href="#" class="footer-link">Documentation</a>
                     <a href="#" class="footer-link">Support</a>
-                    <a href="#" class="footer-link">API</a>
                 </div>
             </div>
         </div>

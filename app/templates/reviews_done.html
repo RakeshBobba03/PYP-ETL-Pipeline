@@ -19,7 +19,7 @@
     {% if new_items_approved %}
       <div style="background: rgba(139, 179, 57, 0.1); padding: 1.5rem; border-radius: 6px; border: 2px solid var(--accent); margin-bottom: 2rem; text-align: left;">
         <h3 style="color: var(--accent); margin: 0 0 1rem 0;">
-          <i class="mdi mdi-rocket-launch"></i> Ready to Push Data
+          <i class="mdi mdi-upload"></i> Ready to Push Data
         </h3>
         <p style="margin: 0 0 1rem 0; color: var(--text); line-height: 1.5;">
           <strong>What will be pushed:</strong> The following items will be processed and sent to your database. 
@@ -136,7 +136,7 @@
       <form action="{{ url_for('main.push_to_dgraph') }}" method="post" style="margin-bottom:2rem;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn primary" style="width:16rem; font-size:1.15em;">
-          <i class="mdi mdi-rocket-launch"></i>
+          <i class="mdi mdi-upload"></i>
           Push Data
         </button>
       </form>
