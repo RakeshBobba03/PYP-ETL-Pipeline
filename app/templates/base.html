@@ -91,6 +91,96 @@
 
     <!-- JavaScript -->
     <script>
+        // Global filter functions
+        function clearFilters() {
+            // Clear the inputs
+            const searchInput = document.getElementById('search-input');
+            const typeFilter = document.getElementById('type-filter');
+            const confidenceFilter = document.getElementById('confidence-filter');
+            
+            if (searchInput) searchInput.value = '';
+            if (typeFilter) typeFilter.value = '';
+            if (confidenceFilter) confidenceFilter.value = '';
+            
+            // Show all items
+            const items = document.querySelectorAll('.review-item');
+            items.forEach(item => {
+                item.style.display = 'block';
+            });
+            
+            // Hide no results message
+            const noResults = document.getElementById('no-results');
+            if (noResults) noResults.style.display = 'none';
+        }
+
+        function filterItems() {
+            const searchInput = document.getElementById('search-input');
+            const typeFilter = document.getElementById('type-filter');
+            const confidenceFilter = document.getElementById('confidence-filter');
+            const reviewItems = document.querySelectorAll('.review-item');
+            const noResults = document.getElementById('no-results');
+            
+            if (!searchInput || !typeFilter || !confidenceFilter) {
+                console.error('Filter elements not found!');
+                return;
+            }
+            
+            const searchTerm = searchInput.value.toLowerCase();
+            const selectedType = typeFilter.value;
+            const selectedConfidence = confidenceFilter.value;
+            
+            let visibleCount = 0;
+            
+            reviewItems.forEach(item => {
+                const itemName = item.dataset.name || '';
+                const itemType = item.dataset.type || '';
+                const itemConfidence = item.dataset.confidence || '';
+                
+                const matchesSearch = !searchTerm || itemName.includes(searchTerm);
+                const matchesType = !selectedType || itemType === selectedType;
+                const matchesConfidence = !selectedConfidence || itemConfidence === selectedConfidence;
+                
+                if (matchesSearch && matchesType && matchesConfidence) {
+                    item.style.display = 'block';
+                    visibleCount++;
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+            
+            // Show/hide no results message
+            if (noResults) {
+                if (visibleCount === 0) {
+                    noResults.style.display = 'block';
+                } else {
+                    noResults.style.display = 'none';
+                }
+            }
+        }
+
+        function quickApprove(itemId, choice) {
+            // Create a form and submit it programmatically
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/reviews/handle_review/${itemId}`;
+            
+            const csrfToken = document.querySelector('input[name="csrf_token"]').value;
+            const csrfInput = document.createElement('input');
+            csrfInput.type = 'hidden';
+            csrfInput.name = 'csrf_token';
+            csrfInput.value = csrfToken;
+            
+            const choiceInput = document.createElement('input');
+            choiceInput.type = 'hidden';
+            choiceInput.name = 'choice';
+            choiceInput.value = choice;
+            
+            form.appendChild(csrfInput);
+            form.appendChild(choiceInput);
+            document.body.appendChild(form);
+            form.submit();
+        }
+
         // Auto-hide flash messages after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const flashMessages = document.querySelectorAll('.flash-message');
@@ -100,6 +190,26 @@
                     setTimeout(() => message.remove(), 300);
                 }, 5000);
             });
+            
+            // Set up filter event listeners
+            const searchInput = document.getElementById('search-input');
+            const typeFilter = document.getElementById('type-filter');
+            const confidenceFilter = document.getElementById('confidence-filter');
+            
+            if (searchInput) {
+                searchInput.addEventListener('input', filterItems);
+                console.log('Added input listener to search');
+            }
+            if (typeFilter) {
+                typeFilter.addEventListener('change', filterItems);
+                console.log('Added change listener to type filter');
+            }
+            if (confidenceFilter) {
+                confidenceFilter.addEventListener('change', filterItems);
+                console.log('Added change listener to confidence filter');
+            }
+            
+            console.log('Filters set up successfully!');
         });
 
         // Toast notification system

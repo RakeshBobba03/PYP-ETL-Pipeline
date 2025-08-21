@@ -99,22 +99,35 @@
 
   <!-- Smart Filtering -->
   <div class="filter-section">
-    <div class="filter-controls">
-      <input type="text" id="search-input" placeholder="Search items..." class="search-input">
-      <label for="type-filter" class="filter-label">Type:</label>
-      <select id="type-filter" class="filter-select" title="Filter by item type">
-        <option value="">All Types</option>
-        <option value="product">Products Only</option>
-        <option value="ingredient">Ingredients Only</option>
-      </select>
-      <label for="confidence-filter" class="filter-label">Confidence:</label>
-      <select id="confidence-filter" class="filter-select" title="Filter by confidence level">
-        <option value="">All Confidence Levels</option>
-        <option value="high">High (80%+)</option>
-        <option value="medium">Medium (60-79%)</option>
-        <option value="low">Low (<60%)</option>
-      </select>
-      <button onclick="clearFilters()" class="btn btn-secondary">Clear Filters</button>
+    <div class="filter-controls" style="display: flex !important; flex-direction: row !important; gap: 1.5rem; align-items: center; flex-wrap: wrap; width: 100%;">
+      <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+        <i class="mdi mdi-magnify" style="color: var(--primary);"></i>
+        <input type="text" id="search-input" placeholder="Search items..." class="search-input">
+      </div>
+      
+      <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+        <label for="type-filter" class="filter-label">Type:</label>
+        <select id="type-filter" class="filter-select" title="Filter by item type">
+          <option value="">All Types</option>
+          <option value="product">Products Only</option>
+          <option value="ingredient">Ingredients Only</option>
+        </select>
+      </div>
+      
+      <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+        <label for="confidence-filter" class="filter-label">Confidence:</label>
+        <select id="confidence-filter" class="filter-select" title="Filter by confidence level">
+          <option value="">All Confidence Levels</option>
+          <option value="high">High (80%+)</option>
+          <option value="medium">Medium (60-79%)</option>
+          <option value="low">Low (<60%)</option>
+        </select>
+      </div>
+      
+      <button onclick="clearFilters()" class="btn btn-secondary">
+        <i class="mdi mdi-filter-remove"></i>
+        Clear Filters
+      </button>
     </div>
   </div>
 
@@ -235,86 +248,8 @@
 {% endblock %}
 
 <script>
-// Search and filtering functionality
-document.addEventListener('DOMContentLoaded', function() {
-  const searchInput = document.getElementById('search-input');
-  const typeFilter = document.getElementById('type-filter');
-  const confidenceFilter = document.getElementById('confidence-filter');
-  const reviewItems = document.querySelectorAll('.review-item');
-  const noResults = document.getElementById('no-results');
-
-  function filterItems() {
-    const searchTerm = searchInput.value.toLowerCase();
-    const selectedType = typeFilter.value;
-    const selectedConfidence = confidenceFilter.value;
-    
-    let visibleCount = 0;
-    
-    reviewItems.forEach(item => {
-      const itemName = item.dataset.name;
-      const itemType = item.dataset.type;
-      const itemConfidence = item.dataset.confidence;
-      
-      const matchesSearch = !searchTerm || itemName.includes(searchTerm);
-      const matchesType = !selectedType || itemType === selectedType;
-      const matchesConfidence = !selectedConfidence || itemConfidence === selectedConfidence;
-      
-      if (matchesSearch && matchesType && matchesConfidence) {
-        item.style.display = 'block';
-        visibleCount++;
-      } else {
-        item.style.display = 'none';
-      }
-    });
-    
-    // Show/hide no results message
-    if (visibleCount === 0) {
-      noResults.style.display = 'block';
-    } else {
-      noResults.style.display = 'none';
-    }
-  }
-
-  // Add event listeners
-  searchInput.addEventListener('input', filterItems);
-  typeFilter.addEventListener('change', filterItems);
-  confidenceFilter.addEventListener('change', filterItems);
-});
-
-function clearFilters() {
-  document.getElementById('search-input').value = '';
-  document.getElementById('type-filter').value = '';
-  document.getElementById('confidence-filter').value = '';
-  
-  // Show all items
-  document.querySelectorAll('.review-item').forEach(item => {
-    item.style.display = 'block';
-  });
-  document.getElementById('no-results').style.display = 'none';
-}
-
-function quickApprove(itemId, choice) {
-  // Create a form and submit it programmatically
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = `/reviews/handle_review/${itemId}`;
-  
-  const csrfToken = document.querySelector('input[name="csrf_token"]').value;
-  const csrfInput = document.createElement('input');
-  csrfInput.type = 'hidden';
-  csrfInput.name = 'csrf_token';
-  csrfInput.value = csrfToken;
-  
-  const choiceInput = document.createElement('input');
-  choiceInput.type = 'hidden';
-  choiceInput.name = 'choice';
-  choiceInput.value = choice;
-  
-  form.appendChild(csrfInput);
-  form.appendChild(choiceInput);
-  document.body.appendChild(form);
-  form.submit();
-}
+// Event listeners are now set up in the base template
+console.log('Reviews page loaded - filters should be working!');
 </script>
 
 <style>
@@ -380,17 +315,27 @@ function quickApprove(itemId, choice) {
 
 .filter-section {
   margin-bottom: 2rem;
-  padding: 1rem;
+  padding: 1.5rem;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .filter-controls {
-  display: flex;
-  gap: 1rem;
+  display: flex !important;
+  gap: 1.5rem;
   align-items: center;
   flex-wrap: wrap;
+  flex-direction: row !important;
+  width: 100%;
+}
+
+.filter-group {
+  display: flex !important;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .filter-label {
@@ -400,18 +345,34 @@ function quickApprove(itemId, choice) {
 }
 
 .search-input, .filter-select {
-  padding: 0.5rem;
+  padding: 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
+  border-radius: 8px;
+  background: var(--card-bg);
   color: var(--text);
   min-width: 150px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.search-input:focus, .filter-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(74, 124, 89, 0.2);
+  transform: translateY(-1px);
 }
 
 .btn-secondary {
   background: var(--card-bg);
   border: 1px solid var(--border);
   color: var(--text);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-secondary:hover {
+  background: var(--hover);
+  border-color: var(--primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .review-header {
@@ -497,6 +458,7 @@ function quickApprove(itemId, choice) {
   text-align: center;
   padding: 3rem;
   color: var(--muted);
+  animation: fadeIn 0.4s ease-out;
 }
 
 .no-results h3 {
@@ -504,10 +466,32 @@ function quickApprove(itemId, choice) {
   color: var(--text);
 }
 
+.review-item.filtered-out {
+  opacity: 0.3;
+  transform: scale(0.98);
+  transition: all 0.3s ease;
+}
+
+.filter-section {
+  position: relative;
+}
+
+.filter-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  border-radius: 12px 12px 0 0;
+}
+
 @media (max-width: 768px) {
   .filter-controls {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
   }
   
   .search-input, .filter-select {
@@ -524,4 +508,6 @@ function quickApprove(itemId, choice) {
     justify-content: center;
   }
 }
+
+
 </style>
