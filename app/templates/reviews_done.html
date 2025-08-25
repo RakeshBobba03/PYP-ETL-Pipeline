@@ -33,7 +33,7 @@
               <i class="mdi mdi-domain"></i> Businesses (Auto-Created)
             </h4>
             <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
-              <strong>{{ new_items_approved|map(attribute='member')|map(attribute='name')|unique|list|length }}</strong> business{{ 'es' if (new_items_approved|map(attribute='member')|map(attribute='name')|unique|list|length) != 1 else '' }} created during ETL
+              <strong>{{ all_etl_companies|length }}</strong> business{{ 'es' if all_etl_companies|length != 1 else '' }} created during ETL
             </p>
           </div>
           
@@ -64,8 +64,7 @@
         </h3>
         
         <!-- Businesses -->
-        {% set businesses = new_items_approved|map(attribute='member')|map(attribute='name')|unique|list %}
-        {% if businesses %}
+        {% if all_etl_companies %}
         <div style="margin-bottom: 1.5rem;">
           <h4 style="color: var(--primary); margin-bottom: 0.5rem;">
             <i class="mdi mdi-domain"></i> Businesses Created During ETL
@@ -74,11 +73,15 @@
             These businesses were automatically created when you uploaded the file:
           </p>
           <ul style="list-style: disc; padding-left: 1.5rem; margin: 0;">
-            {% for business_name in businesses %}
+            {% for company in all_etl_companies %}
               <li style="margin-bottom: 0.3rem; color: var(--text);">
-                <strong>{{ business_name }}</strong>
+                <strong>{{ company.name }}</strong>
                 <span style="color: var(--muted); font-size: 0.9rem;">
-                  (auto-created from submission)
+                  {% if company.name in companies_with_reviewed_items %}
+                    (auto-created from submission, has reviewed items)
+                  {% else %}
+                    (auto-created from submission, all items auto-resolved)
+                  {% endif %}
                 </span>
               </li>
             {% endfor %}

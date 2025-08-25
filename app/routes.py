@@ -207,12 +207,23 @@ def review_list():
         NewItem.matched_canonical_id.isnot(None)
     ).all()
     
-    current_app.logger.info(f"[review_list] No pending reviews. New items to add: {len(new_items_to_add)} | New items approved: {len(new_items_approved)} | Matched items: {len(matched_items)}")
+    # Get all companies that were created during ETL processing
+    # This includes companies with auto-resolved items (no manual review needed)
+    all_etl_companies = Member.query.distinct().all()
+    
+    # Get companies that have items requiring manual review (for the summary)
+    companies_with_reviewed_items = set()
+    for item in new_items_approved:
+        companies_with_reviewed_items.add(item.member.name)
+    
+    current_app.logger.info(f"[review_list] No pending reviews. New items to add: {len(new_items_to_add)} | New items approved: {len(new_items_approved)} | Matched items: {len(matched_items)} | Total ETL companies: {len(all_etl_companies)}")
     return render_template(
         'reviews_done.html',
         new_items_to_add=new_items_to_add,
         new_items_approved=new_items_approved,
         matched_items=matched_items,
+        all_etl_companies=all_etl_companies,
+        companies_with_reviewed_items=companies_with_reviewed_items,
         val_errors=val_errors,
         error_filename=error_filename
     )
