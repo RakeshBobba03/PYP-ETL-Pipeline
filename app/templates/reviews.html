@@ -173,59 +173,87 @@
           </p>
         </div>
 
-        <p class="card-text">
-          Select the best match from your canonical data, mark as new, or ignore this item:
-        </p>
-        
-        <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
-              method="post" style="margin-bottom:.5rem;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <ul class="radio-list">
-            <!-- Top suggestion -->
-            {% if review.suggested_ext_id %}
-            <li>
-              <label>
-                <input type="radio"
-                       name="choice"
-                       value="{{ review.suggested_ext_id }}">
-                <strong>{{ review.suggested_name }}</strong>
-                <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
-                <span style="color: var(--accent); font-size: 0.8rem;">← Best Match</span>
-              </label>
-            </li>
-            {% endif %}
-            
-            <!-- Alternatives -->
-            {% for alt in review.alternatives %}
-            <li style="padding-left:1.5rem;">
-              <label>
-                <input type="radio"
-                       name="choice"
-                       value="{{ alt.ext_id }}">
-                {{ alt.name }}
-                <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
-              </label>
-            </li>
-            {% endfor %}
-            
-            <!-- New / no match -->
-            <li>
-              <label>
-                <input type="radio"
-                       name="choice"
-                       value="__new__"
-                       checked>
-                <em>→ New / No match in canonical data</em>
-                <span style="color: var(--primary); font-size: 0.8rem;">← Will create new {{ review.new_item.type }} in Dgraph</span>
-              </label>
-            </li>
-          </ul>
-          
-          <button type="submit" class="btn accent">
-            <i class="mdi mdi-content-save"></i>
-            Save Decision
-          </button>
-        </form>
+                 <p class="card-text">
+           Select one or more matches from your canonical data, mark as new, or ignore this item:
+         </p>
+         
+         <!-- Canonical matches form with Save Decision button -->
+         <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+               method="post" style="margin-bottom:.5rem;" id="review-form-{{ review.new_item_id }}">
+           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+           
+           <!-- Canonical Matches Section -->
+           <div class="matches-section">
+             <h5 style="color: var(--text); margin-bottom: 0.5rem;">
+               <i class="mdi mdi-link-variant"></i> Canonical Matches (Select one or more):
+             </h5>
+             <ul class="checkbox-list">
+               <!-- Top suggestion -->
+               {% if review.suggested_ext_id %}
+               <li>
+                 <label class="match-option">
+                   <input type="checkbox"
+                          name="canonical_choices"
+                          value="{{ review.suggested_ext_id }}"
+                          class="canonical-checkbox"
+                          data-form-id="{{ review.new_item_id }}">
+                   <strong>{{ review.suggested_name }}</strong>
+                   <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
+                   <span style="color: var(--accent); font-size: 0.8rem;">← Best Match</span>
+                 </label>
+               </li>
+               {% endif %}
+               
+               <!-- Alternatives -->
+               {% for alt in review.alternatives %}
+               <li style="padding-left:1.5rem;">
+                 <label class="match-option">
+                   <input type="checkbox"
+                          name="canonical_choices"
+                          value="{{ alt.ext_id }}"
+                          class="canonical-checkbox"
+                          data-form-id="{{ review.new_item_id }}">
+                   {{ alt.name }}
+                   <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
+                 </label>
+               </li>
+               {% endfor %}
+             </ul>
+           </div>
+           
+           <div class="form-validation" style="margin-top: 1rem; padding: 0.5rem; border-radius: 4px; display: none;" id="validation-{{ review.new_item_id }}">
+             <p style="margin: 0; color: #e85a5a; font-size: 0.9rem;">
+               <i class="mdi mdi-alert-circle"></i> 
+               <span id="validation-text-{{ review.new_item_id }}">Please select at least one canonical match before submitting, or use "Create New" button.</span>
+             </p>
+           </div>
+           
+           <button type="submit" class="btn accent" id="submit-btn-{{ review.new_item_id }}">
+             <i class="mdi mdi-content-save"></i>
+             Save Decision
+           </button>
+         </form>
+         
+         <!-- New Item Section -->
+         <div class="new-item-section" style="margin-top: 1rem;">
+           <h5 style="color: var(--text); margin-bottom: 0.5rem;">
+             <i class="mdi mdi-plus-circle"></i> Or Create New:
+           </h5>
+           <p style="margin: 0; color: var(--muted); font-size: 0.9rem;">
+             If no canonical matches are suitable, create a new {{ review.new_item.type }} in Dgraph:
+           </p>
+         </div>
+         
+         <!-- Separate form for creating new item -->
+         <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+               method="post" style="margin-bottom:.5rem;">
+           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+           <input type="hidden" name="choice" value="__new__">
+           <button type="submit" class="btn primary" style="margin-top: 1rem; margin-bottom: 1.5rem;">
+             <i class="mdi mdi-plus-circle"></i>
+             Create New {{ review.new_item.type|capitalize }}
+           </button>
+         </form>
         
         <form action="{{ url_for('main.ignore_review_item', item_id=review.new_item_id) }}" method="post">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -250,6 +278,115 @@
 <script>
 // Event listeners are now set up in the base template
 console.log('Reviews page loaded - filters should be working!');
+
+// Simple form validation for canonical choices
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('[DOMContentLoaded] Setting up form validation...');
+    
+    // Handle canonical checkbox changes for validation
+    document.querySelectorAll('.canonical-checkbox').forEach(function(checkbox) {
+        checkbox.addEventListener('change', function(e) {
+            const formId = this.getAttribute('data-form-id');
+            console.log(`[Event] Canonical checkbox changed for form ${formId}: ${this.value}, checked: ${this.checked}`);
+            validateForm(formId);
+        });
+    });
+
+    // Handle form submissions for canonical choices
+    document.querySelectorAll('form[id^="review-form-"]').forEach(function(form) {
+        form.addEventListener('submit', function(e) {
+            const formId = this.id.replace('review-form-', '');
+            const canonicalChoices = this.querySelectorAll('input[name="canonical_choices"]:checked');
+            
+            console.log(`[Submit] Form ${formId} - Canonical choices: ${canonicalChoices.length}`);
+            
+            // Simple validation - must have at least one canonical choice selected
+            if (canonicalChoices.length === 0) {
+                e.preventDefault();
+                console.log(`[Submit] No canonical choices selected - preventing submission for form ${formId}`);
+                alert('Please select at least one canonical match before submitting.');
+                return false;
+            }
+        });
+        
+        // Initialize validation for each form
+        const formId = form.id.replace('review-form-', '');
+        validateForm(formId);
+    });
+});
+
+function validateForm(formId) {
+    const canonicalChoices = document.querySelectorAll(`#review-form-${formId} input[name="canonical_choices"]:checked`);
+    const validationDiv = document.getElementById(`validation-${formId}`);
+    const submitBtn = document.getElementById(`submit-btn-${formId}`);
+    const validationText = document.getElementById(`validation-text-${formId}`);
+    
+    // Simple validation - must have at least one canonical choice selected
+    const isValid = canonicalChoices.length > 0;
+    
+    if (!isValid) {
+        validationDiv.style.display = 'block';
+        validationText.textContent = 'Please select at least one canonical match before submitting, or use "Create New" button.';
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.style.cursor = 'not-allowed';
+    } else {
+        validationDiv.style.display = 'none';
+        submitBtn.disabled = false;
+        submitBtn.style.opacity = '1';
+        submitBtn.style.cursor = 'pointer';
+    }
+    
+    return isValid;
+}
+
+// Quick approve functions (existing)
+function quickApprove(itemId, choice) {
+    const form = document.getElementById(`review-form-${itemId}`);
+    if (!form) return;
+    
+    if (choice === 'new') {
+        // Create a new form for the "Create New" action
+        const newForm = document.createElement('form');
+        newForm.method = 'POST';
+        newForm.action = form.action;
+        
+        // Add CSRF token
+        const csrfToken = form.querySelector('input[name="csrf_token"]');
+        if (csrfToken) {
+            const newCsrfInput = document.createElement('input');
+            newCsrfInput.type = 'hidden';
+            newCsrfInput.name = 'csrf_token';
+            newCsrfInput.value = csrfToken.value;
+            newForm.appendChild(newCsrfInput);
+        }
+        
+        // Add choice parameter
+        const choiceInput = document.createElement('input');
+        choiceInput.type = 'hidden';
+        choiceInput.name = 'choice';
+        choiceInput.value = '__new__';
+        newForm.appendChild(choiceInput);
+        
+        // Submit the form
+        document.body.appendChild(newForm);
+        newForm.submit();
+    } else {
+        // Clear all selections first
+        form.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+        
+        // Select the specific canonical match
+        const checkbox = form.querySelector(`input[value="${choice}"]`);
+        if (checkbox) {
+            checkbox.checked = true;
+        }
+        
+        // Validate and submit
+        if (validateForm(itemId)) {
+            form.submit();
+        }
+    }
+}
 </script>
 
 <style>
@@ -485,6 +622,129 @@ console.log('Reviews page loaded - filters should be working!');
   height: 2px;
   background: linear-gradient(90deg, var(--primary), var(--accent));
   border-radius: 12px 12px 0 0;
+}
+
+/* Multi-selection styles */
+.matches-section, .new-item-section {
+  margin-top: 1rem;
+}
+
+.checkbox-list, .radio-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.match-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.match-option:hover {
+  background-color: rgba(139, 179, 57, 0.1);
+}
+
+.match-option input[type="checkbox"] {
+  transform: scale(1.2);
+  margin-right: 0.5rem;
+  accent-color: var(--accent);
+}
+
+.match-option input[type="radio"] {
+  transform: scale(1.2);
+  margin-right: 0.5rem;
+  accent-color: var(--primary);
+}
+
+/* Visual feedback for conflicting selections */
+.matches-section.conflicting .match-option {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.new-item-section.conflicting {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Prevention indicator */
+.conflict-prevented {
+  animation: shake 0.5s ease-in-out;
+  border: 2px solid #ff9800 !important;
+  background-color: rgba(255, 152, 0, 0.1) !important;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* Highlight active section */
+.matches-section.active {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+
+.new-item-section.active {
+  border-left: 3px solid var(--primary);
+  padding-left: 0.5rem;
+}
+
+/* Disabled input styles */
+.match-option input[type="checkbox"]:disabled,
+.match-option input[type="radio"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.match-option input[type="checkbox"]:disabled + *,
+.match-option input[type="radio"]:disabled + * {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.matches-section.disabled .match-option {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.new-item-section.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.form-validation {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  background-color: rgba(232, 90, 90, 0.1);
+  border: 1px solid rgba(232, 90, 90, 0.3);
+  color: #e85a5a;
+  font-size: 0.9rem;
+  display: none;
+  animation: fadeIn 0.3s ease;
+}
+
+.form-validation i {
+  margin-right: 0.5rem;
+}
+
+.form-validation p {
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @media (max-width: 768px) {

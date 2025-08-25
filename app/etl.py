@@ -349,14 +349,24 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                             # Low confidence - require manual review
                             alts = []
                             ext_map = prod_map if kind == 'product' else ing_map
-                            for alt_nm, alt_sc, _ in process.extract(text_sanitized, pool, scorer=fuzz.token_set_ratio, processor=utils.default_process, limit=3):
-                                alts.append({"name": alt_nm, "score": float(alt_sc), "ext_id": ext_map.get(alt_nm)})
+                            suggested_ext_id = ext_map.get(name0) if name0 else None
+                            
+                            # Get top matches but exclude the suggested match to avoid duplication
+                            for alt_nm, alt_sc, _ in process.extract(text_sanitized, pool, scorer=fuzz.token_set_ratio, processor=utils.default_process, limit=5):
+                                alt_ext_id = ext_map.get(alt_nm)
+                                # Skip if this is the same as the suggested match
+                                if alt_ext_id != suggested_ext_id:
+                                    alts.append({"name": alt_nm, "score": float(alt_sc), "ext_id": alt_ext_id})
+                                # Stop when we have 3 alternatives (excluding the suggested match)
+                                if len(alts) >= 3:
+                                    break
+                                    
                             current_app.logger.info(
                                 f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) no good match found (score {score0:.1f}%), will require review. Top guess: '{name0}'."
                             )
                             mr = MatchReview(
                                 new_item=ni, suggested_name=name0 or text_sanitized,
-                                suggested_ext_id=(ext_map.get(name0) if name0 else None),
+                                suggested_ext_id=suggested_ext_id,
                                 score=score0, alternatives=alts, approved=None
                             )
                             db.session.add(mr)

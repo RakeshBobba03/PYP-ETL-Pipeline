@@ -193,18 +193,18 @@ def review_list():
     new_items_to_add = NewItem.query.filter_by(resolved=False).all()
     
     # Fix: Properly categorize approved items as new vs matched
-    # New items: approved but no canonical ID (user chose "new")
-    # Matched items: approved with canonical ID (user chose existing match)
+    # New items: approved but NOT resolved (user chose "Create New")
+    # Matched items: approved AND resolved (user chose existing match)
     new_items_approved = NewItem.query.join(MatchReview).filter(
-        NewItem.resolved == True,
-        MatchReview.approved == True,
-        NewItem.matched_canonical_id.is_(None)
+        NewItem.resolved == False,  # Fixed: Look for unresolved items (Create New)
+        MatchReview.approved == True
     ).all()
     
-    matched_items = NewItem.query.join(MatchReview).filter(
-        NewItem.resolved == True,
-        MatchReview.approved == True,
-        NewItem.matched_canonical_id.isnot(None)
+    # Get all items that were resolved (either auto-resolved or manually matched)
+    # This includes items that were linked to existing canonical data
+    matched_items = NewItem.query.filter(
+        NewItem.resolved == True,   # Look for resolved items (canonical matches)
+        NewItem.ignored == False    # Exclude ignored items
     ).all()
     
     # Get all companies that were created during ETL processing
@@ -237,23 +237,46 @@ def handle_review(item_id):
         flash("Review item not found or already handled.", "warning")
         return redirect(url_for('main.review_list'))
 
-    choice = request.form.get('choice')
-    current_app.logger.info(f"[handle_review] Choice received: {choice}")
+    # Handle multiple canonical choices
+    canonical_choices = request.form.getlist('canonical_choices')
+    single_choice = request.form.get('choice')
+    
+    current_app.logger.info(f"[handle_review] Canonical choices: {canonical_choices}, Single choice: {single_choice}")
 
-    if choice == '__new__':
-        # User chose to create as new item
+    if canonical_choices:
+        # User selected one or more canonical matches
         review.approved = True
         review.new_item.resolved = True
+        
+        # Store multiple canonical IDs as JSON in a new field
+        # For now, we'll use the first choice as the primary match
+        # and store the rest in the alternatives field
+        primary_choice = canonical_choices[0]
+        review.new_item.matched_canonical_id = primary_choice
+        
+        # Store all selected choices in alternatives for future reference
+        all_choices = [{"ext_id": choice, "selected": True} for choice in canonical_choices]
+        review.alternatives = all_choices
+        
+        flash(f"Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical item(s).", "success")
+        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical items: {canonical_choices}")
+        
+    elif single_choice == '__new__':
+        # User chose to create as new item
+        review.approved = True
+        review.new_item.resolved = False  # Mark as unresolved so it gets created as new
         # Don't set matched_canonical_id since we want it as a new item
         flash(f"Approved '{review.new_item.name}' as new {review.new_item.type}.", "success")
         current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' as new {review.new_item.type}")
-    elif choice and choice != '__new__':
-        # User chose a specific canonical match
+        
+    elif single_choice and single_choice != '__new__':
+        # User chose a single canonical match (backward compatibility)
         review.approved = True
         review.new_item.resolved = True
-        review.new_item.matched_canonical_id = choice
+        review.new_item.matched_canonical_id = single_choice
         flash(f"Approved '{review.new_item.name}' matched to canonical data.", "success")
-        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to canonical ID: {choice}")
+        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to canonical ID: {single_choice}")
+        
     else:
         # No choice made - treat as ignored
         review.approved = False
@@ -291,7 +314,7 @@ def batch_save_decisions():
         # For batch save, we'll approve all items as "new" since they need review
         # This means they'll be created as new products/ingredients in Dgraph
         review.approved = True
-        review.new_item.resolved = True
+        review.new_item.resolved = False  # Mark as unresolved so they get created as new
         # Don't set matched_canonical_id since we want them as new items
         current_app.logger.info(f"[batch_save_decisions] Marking '{review.new_item.name}' as new {review.new_item.type}")
         db.session.add(review)
@@ -571,42 +594,165 @@ def push_to_dgraph():
                 exist_ps = {p["title"]: p["productID"] for p in node["products"]}
                 exist_is = {i["title"]: i["ingredientID"] for i in node["ingredients"]}
 
-                subs_ps = [ni.name for ni in m.new_items if ni.type=="product"    and not ni.ignored]
-                subs_is = [ni.name for ni in m.new_items if ni.type=="ingredient" and not ni.ignored]
-                new_ps  = [p for p in subs_ps if p not in exist_ps]
-                new_is  = [i for i in subs_is if i not in exist_is]
+                # Get all products and ingredients for this member
+                all_products = [ni for ni in m.new_items if ni.type=="product" and not ni.ignored]
+                all_ingredients = [ni for ni in m.new_items if ni.type=="ingredient" and not ni.ignored]
+                
+                # Separate resolved (matched to canonicals) vs unresolved items
+                resolved_products = [ni for ni in all_products if ni.resolved and ni.matched_canonical_id]
+                unresolved_products = [ni for ni in all_products if not ni.resolved]
+                
+                resolved_ingredients = [ni for ni in all_ingredients if ni.resolved and ni.matched_canonical_id]
+                unresolved_ingredients = [ni for ni in all_ingredients if not ni.resolved]
+                
+                current_app.logger.info(f"[push] Member '{biz}' update: {len(resolved_products)} resolved products, {len(unresolved_products)} unresolved products")
+                current_app.logger.info(f"[push] Member '{biz}' update: {len(resolved_ingredients)} resolved ingredients, {len(unresolved_ingredients)} unresolved ingredients")
 
-                prod_ids = []
-                if new_ps:
+                # Collect all product IDs to link (existing + resolved + new)
+                all_product_ids = list(exist_ps.values())  # Start with existing
+                new_product_names = []
+                
+                # Add resolved product IDs (handle multiple selections)
+                for ni in resolved_products:
+                    # Check if this item has multiple canonical selections
+                    if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                        # Get all selected canonical IDs from alternatives
+                        selected_canonicals = []
+                        for alt in ni.review.alternatives:
+                            if isinstance(alt, dict) and alt.get('selected'):
+                                selected_canonicals.append(alt.get('ext_id'))
+                        
+                        # Add all selected canonical IDs
+                        for canonical_id in selected_canonicals:
+                            if canonical_id and canonical_id not in all_product_ids:
+                                all_product_ids.append(canonical_id)
+                                current_app.logger.info(f"[push] Adding multi-selected product '{ni.name}' (ID: {canonical_id}) to existing member '{biz}'")
+                    else:
+                        # Single selection (backward compatibility)
+                        if ni.matched_canonical_id and ni.matched_canonical_id not in all_product_ids:
+                            all_product_ids.append(ni.matched_canonical_id)
+                            current_app.logger.info(f"[push] Adding resolved product '{ni.name}' (ID: {ni.matched_canonical_id}) to existing member '{biz}'")
+                
+                # Check unresolved products
+                for ni in unresolved_products:
+                    if ni.name in exist_ps:
+                        # Already linked to this member
+                        current_app.logger.info(f"[push] Product '{ni.name}' already linked to member '{biz}'")
+                    else:
+                        # Check if it exists in Dgraph
+                        q = """
+                        query ($title: String!) {
+                          queryProduct(filter: {title: {eq: $title}}) {
+                            productID
+                            title
+                          }
+                        }
+                        """
+                        resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                        existing_products = resp.json().get("data", {}).get("queryProduct", [])
+                        
+                        if existing_products:
+                            # Product exists in Dgraph - link it
+                            product_id = existing_products[0]["productID"]
+                            if product_id not in all_product_ids:
+                                all_product_ids.append(product_id)
+                                current_app.logger.info(f"[push] Linking existing product '{ni.name}' (ID: {product_id}) to member '{biz}'")
+                        else:
+                            # Product doesn't exist - will create new one
+                            new_product_names.append(ni.name)
+                            current_app.logger.info(f"[push] Will create new product '{ni.name}' for existing member '{biz}'")
+
+                # Same logic for ingredients
+                all_ingredient_ids = list(exist_is.values())  # Start with existing
+                new_ingredient_names = []
+                
+                # Add resolved ingredient IDs (handle multiple selections)
+                for ni in resolved_ingredients:
+                    # Check if this item has multiple canonical selections
+                    if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                        # Get all selected canonical IDs from alternatives
+                        selected_canonicals = []
+                        for alt in ni.review.alternatives:
+                            if isinstance(alt, dict) and alt.get('selected'):
+                                selected_canonicals.append(alt.get('ext_id'))
+                        
+                        # Add all selected canonical IDs
+                        for canonical_id in selected_canonicals:
+                            if canonical_id and canonical_id not in all_ingredient_ids:
+                                all_ingredient_ids.append(canonical_id)
+                                current_app.logger.info(f"[push] Adding multi-selected ingredient '{ni.name}' (ID: {canonical_id}) to existing member '{biz}'")
+                    else:
+                        # Single selection (backward compatibility)
+                        if ni.matched_canonical_id and ni.matched_canonical_id not in all_ingredient_ids:
+                            all_ingredient_ids.append(ni.matched_canonical_id)
+                            current_app.logger.info(f"[push] Adding resolved ingredient '{ni.name}' (ID: {ni.matched_canonical_id}) to existing member '{biz}'")
+                
+                # Check unresolved ingredients
+                for ni in unresolved_ingredients:
+                    if ni.name in exist_is:
+                        # Already linked to this member
+                        current_app.logger.info(f"[push] Ingredient '{ni.name}' already linked to member '{biz}'")
+                    else:
+                        # Check if it exists in Dgraph
+                        q = """
+                        query ($title: String!) {
+                          queryIngredients(filter: {title: {eq: $title}}) {
+                            ingredientID
+                            title
+                          }
+                        }
+                        """
+                        resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                        existing_ingredients = resp.json().get("data", {}).get("queryIngredients", [])
+                        
+                        if existing_ingredients:
+                            # Ingredient exists in Dgraph - link it
+                            ingredient_id = existing_ingredients[0]["ingredientID"]
+                            if ingredient_id not in all_ingredient_ids:
+                                all_ingredient_ids.append(ingredient_id)
+                                current_app.logger.info(f"[push] Linking existing ingredient '{ni.name}' (ID: {ingredient_id}) to member '{biz}'")
+                        else:
+                            # Ingredient doesn't exist - will create new one
+                            new_ingredient_names.append(ni.name)
+                            current_app.logger.info(f"[push] Will create new ingredient '{ni.name}' for existing member '{biz}'")
+
+                # Create new products if needed
+                new_product_ids = []
+                if new_product_names:
                     mut = """
                     mutation ($in: [AddProductInput!]!) {
                       addProduct(input: $in) { product { title productID } }
                     }
                     """
-                    v = {"in": [{"title": t} for t in new_ps]}
+                    v = {"in": [{"title": t} for t in new_product_names]}
                     r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
                     arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
                     for pr in arr:
-                        prod_ids.append(pr["productID"])
+                        new_product_ids.append(pr["productID"])
                         results["products"].append(pr)
-                    current_app.logger.info(f"[push] Added {len(prod_ids)} new products for member '{biz}'")
+                    current_app.logger.info(f"[push] Created {len(new_product_ids)} new products for existing member '{biz}'")
 
-                ing_ids = []
-                if new_is:
+                # Create new ingredients if needed
+                new_ingredient_ids = []
+                if new_ingredient_names:
                     mut = """
                     mutation ($in: [AddIngredientsInput!]!) {
                       addIngredients(input: $in) { ingredients { title ingredientID } }
                     }
                     """
-                    v = {"in": [{"title": t} for t in new_is]}
+                    v = {"in": [{"title": t} for t in new_ingredient_names]}
                     r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
                     arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
                     for ing in arr:
-                        ing_ids.append(ing["ingredientID"])
+                        new_ingredient_ids.append(ing["ingredientID"])
                         results["ingredients"].append(ing)
-                    current_app.logger.info(f"[push] Added {len(ing_ids)} new ingredients for member '{biz}'")
+                    current_app.logger.info(f"[push] Created {len(new_ingredient_ids)} new ingredients for existing member '{biz}'")
 
-                if prod_ids or ing_ids:
+                # Update member with all product and ingredient IDs
+                all_product_ids.extend(new_product_ids)
+                all_ingredient_ids.extend(new_ingredient_ids)
+                
+                if all_product_ids or all_ingredient_ids:
                     mut = """
                     mutation ($in: UpdateMemberInput!) {
                       updateMember(input: $in) {
@@ -614,8 +760,8 @@ def push_to_dgraph():
                       }
                     }
                     """
-                    all_ps = [{"productID": pid} for pid in list(exist_ps.values()) + prod_ids]
-                    all_is = [{"ingredientID": iid} for iid in list(exist_is.values())  + ing_ids]
+                    all_ps = [{"productID": pid} for pid in all_product_ids]
+                    all_is = [{"ingredientID": iid} for iid in all_ingredient_ids]
                     v = {
                       "in": {
                         "filter": {"memberID": [mem_id]},
@@ -624,14 +770,152 @@ def push_to_dgraph():
                     }
                     requests.post(url, json={"query": mut, "variables": v}, headers=headers)
                     results["members"].append({"memberID": mem_id, "businessName": biz})
-                    current_app.logger.info(f"[push] Linked products/ingredients to member '{biz}'")
+                    current_app.logger.info(f"[push] Updated member '{biz}' with {len(all_product_ids)} products and {len(all_ingredient_ids)} ingredients")
 
                 continue  # done with this existing member
 
             # 2. Brand-new company → build input
             current_app.logger.info(f"[push] Member '{biz}' is new, creating new record in Dgraph…")
-            subs_ps = [ni.name for ni in m.new_items if ni.type=="product"    and (ni.resolved or not ni.ignored)]
-            subs_is = [ni.name for ni in m.new_items if ni.type=="ingredient" and (ni.resolved or not ni.ignored)]
+            
+            # Get all products and ingredients for this member
+            all_products = [ni for ni in m.new_items if ni.type=="product" and not ni.ignored]
+            all_ingredients = [ni for ni in m.new_items if ni.type=="ingredient" and not ni.ignored]
+            
+            # Separate resolved (matched to canonicals) vs unresolved items
+            resolved_products = [ni for ni in all_products if ni.resolved and ni.matched_canonical_id]
+            unresolved_products = [ni for ni in all_products if not ni.resolved]
+            
+            resolved_ingredients = [ni for ni in all_ingredients if ni.resolved and ni.matched_canonical_id]
+            unresolved_ingredients = [ni for ni in all_ingredients if not ni.resolved]
+            
+            current_app.logger.info(f"[push] Member '{biz}': {len(resolved_products)} resolved products, {len(unresolved_products)} unresolved products")
+            current_app.logger.info(f"[push] Member '{biz}': {len(resolved_ingredients)} resolved ingredients, {len(unresolved_ingredients)} unresolved ingredients")
+            
+            # For unresolved items, check if they already exist in Dgraph
+            existing_product_ids = []
+            new_product_names = []
+            
+            for ni in unresolved_products:
+                # Check if this product already exists in Dgraph
+                q = """
+                query ($title: String!) {
+                  queryProduct(filter: {title: {eq: $title}}) {
+                    productID
+                    title
+                  }
+                }
+                """
+                resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                existing_products = resp.json().get("data", {}).get("queryProduct", [])
+                
+                if existing_products:
+                    # Product already exists - reuse it
+                    existing_product_ids.append(existing_products[0]["productID"])
+                    current_app.logger.info(f"[push] Reusing existing product '{ni.name}' (ID: {existing_products[0]['productID']}) for member '{biz}'")
+                else:
+                    # Product doesn't exist - will create new one
+                    new_product_names.append(ni.name)
+                    current_app.logger.info(f"[push] Will create new product '{ni.name}' for member '{biz}'")
+            
+            # Add resolved product IDs (handle multiple selections)
+            for ni in resolved_products:
+                # Check if this item has multiple canonical selections
+                if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                    # Get all selected canonical IDs from alternatives
+                    selected_canonicals = []
+                    for alt in ni.review.alternatives:
+                        if isinstance(alt, dict) and alt.get('selected'):
+                            selected_canonicals.append(alt.get('ext_id'))
+                    
+                    # Add all selected canonical IDs
+                    for canonical_id in selected_canonicals:
+                        if canonical_id and canonical_id not in existing_product_ids:
+                            existing_product_ids.append(canonical_id)
+                            current_app.logger.info(f"[push] Using multi-selected product '{ni.name}' (ID: {canonical_id}) for member '{biz}'")
+                else:
+                    # Single selection (backward compatibility)
+                    if ni.matched_canonical_id and ni.matched_canonical_id not in existing_product_ids:
+                        existing_product_ids.append(ni.matched_canonical_id)
+                        current_app.logger.info(f"[push] Using resolved product '{ni.name}' (ID: {ni.matched_canonical_id}) for member '{biz}'")
+            
+            # Same logic for ingredients
+            existing_ingredient_ids = []
+            new_ingredient_names = []
+            
+            for ni in unresolved_ingredients:
+                # Check if this ingredient already exists in Dgraph
+                q = """
+                query ($title: String!) {
+                  queryIngredients(filter: {title: {eq: $title}}) {
+                    ingredientID
+                    title
+                  }
+                }
+                """
+                resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                existing_ingredients = resp.json().get("data", {}).get("queryIngredients", [])
+                
+                if existing_ingredients:
+                    # Ingredient already exists - reuse it
+                    existing_ingredient_ids.append(existing_ingredients[0]["ingredientID"])
+                    current_app.logger.info(f"[push] Reusing existing ingredient '{ni.name}' (ID: {existing_ingredients[0]['ingredientID']}) for member '{biz}'")
+                else:
+                    # Ingredient doesn't exist - will create new one
+                    new_ingredient_names.append(ni.name)
+                    current_app.logger.info(f"[push] Will create new ingredient '{ni.name}' for member '{biz}'")
+            
+            # Add resolved ingredient IDs (handle multiple selections)
+            for ni in resolved_ingredients:
+                # Check if this item has multiple canonical selections
+                if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                    # Get all selected canonical IDs from alternatives
+                    selected_canonicals = []
+                    for alt in ni.review.alternatives:
+                        if isinstance(alt, dict) and alt.get('selected'):
+                            selected_canonicals.append(alt.get('ext_id'))
+                    
+                    # Add all selected canonical IDs
+                    for canonical_id in selected_canonicals:
+                        if canonical_id and canonical_id not in existing_ingredient_ids:
+                            existing_ingredient_ids.append(canonical_id)
+                            current_app.logger.info(f"[push] Using multi-selected ingredient '{ni.name}' (ID: {canonical_id}) for member '{biz}'")
+                else:
+                    # Single selection (backward compatibility)
+                    if ni.matched_canonical_id and ni.matched_canonical_id not in existing_ingredient_ids:
+                        existing_ingredient_ids.append(ni.matched_canonical_id)
+                        current_app.logger.info(f"[push] Using resolved ingredient '{ni.name}' (ID: {ni.matched_canonical_id}) for member '{biz}'")
+            
+            # Create new products if needed
+            new_product_ids = []
+            if new_product_names:
+                mut = """
+                mutation ($in: [AddProductInput!]!) {
+                  addProduct(input: $in) { product { title productID } }
+                }
+                """
+                v = {"in": [{"title": t} for t in new_product_names]}
+                r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
+                arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
+                for pr in arr:
+                    new_product_ids.append(pr["productID"])
+                    results["products"].append(pr)
+                current_app.logger.info(f"[push] Created {len(new_product_ids)} new products for member '{biz}'")
+            
+            # Create new ingredients if needed
+            new_ingredient_ids = []
+            if new_ingredient_names:
+                mut = """
+                mutation ($in: [AddIngredientsInput!]!) {
+                  addIngredients(input: $in) { ingredients { title ingredientID } }
+                }
+                """
+                v = {"in": [{"title": t} for t in new_ingredient_names]}
+                r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
+                arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
+                for ing in arr:
+                    new_ingredient_ids.append(ing["ingredientID"])
+                    results["ingredients"].append(ing)
+                current_app.logger.info(f"[push] Created {len(new_ingredient_ids)} new ingredients for member '{biz}'")
 
             state_ref = None
             if hasattr(m, 'state1') and m.state1:
@@ -652,11 +936,14 @@ def push_to_dgraph():
             if m.company_bio and m.company_bio.strip():
                 member_input["companyBio"] = m.company_bio
                 
-            # Add products and ingredients only if they exist
-            if subs_ps:
-                member_input["products"] = [{"title": t} for t in subs_ps]
-            if subs_is:
-                member_input["ingredients"] = [{"title": t} for t in subs_is]
+            # Add products and ingredients - combine existing and new IDs
+            all_product_ids = existing_product_ids + new_product_ids
+            all_ingredient_ids = existing_ingredient_ids + new_ingredient_ids
+            
+            if all_product_ids:
+                member_input["products"] = [{"productID": pid} for pid in all_product_ids]
+            if all_ingredient_ids:
+                member_input["ingredients"] = [{"ingredientID": iid} for iid in all_ingredient_ids]
             if state_ref:
                 member_input["stateOrProvince1"] = state_ref
             if hasattr(m, 'zip_code1') and m.zip_code1:
@@ -682,23 +969,23 @@ def push_to_dgraph():
                 current_app.logger.info(f"[push] Created new member '{biz}' in Dgraph")
                 
                 # Add newly created products and ingredients to results for reporting
-                if subs_ps:
-                    for product_name in subs_ps:
+                if new_product_names:
+                    for product_name in new_product_names:
                         results["products"].append({
                             "title": product_name,
                             "productID": f"new_product_{len(results['products'])}",
                             "note": f"Created with member '{biz}'"
                         })
-                    current_app.logger.info(f"[push] Added {len(subs_ps)} new products to results for '{biz}'")
+                    current_app.logger.info(f"[push] Added {len(new_product_names)} new products to results for '{biz}'")
                 
-                if subs_is:
-                    for ingredient_name in subs_is:
+                if new_ingredient_names:
+                    for ingredient_name in new_ingredient_names:
                         results["ingredients"].append({
                             "title": ingredient_name,
                             "ingredientID": f"new_ingredient_{len(results['ingredients'])}",
                             "note": f"Created with member '{biz}'"
                         })
-                    current_app.logger.info(f"[push] Added {len(subs_is)} new ingredients to results for '{biz}'")
+                    current_app.logger.info(f"[push] Added {len(new_ingredient_names)} new ingredients to results for '{biz}'")
             else:
                 err = resp_json.get("errors", [{"message": "Unknown Dgraph error"}])
                 error_msg = err[0].get('message', 'Unknown Dgraph error')
