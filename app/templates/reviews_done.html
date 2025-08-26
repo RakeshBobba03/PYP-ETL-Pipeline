@@ -172,7 +172,7 @@
         
         <button type="button"
                 class="btn accent"
-                onclick="document.getElementById('matched-collapse').classList.toggle('show');"
+                onclick="toggleMatchedItems()"
                 style="width:16rem; font-size:1.05em;">
           <i class="mdi mdi-check-decagram"></i>
           Show Matched Items
@@ -208,10 +208,18 @@
         </div>
       </div>
       <script>
-        document.querySelector('.btn.accent').addEventListener('click', function(){
-          var el = document.getElementById('matched-collapse');
-          el.style.display = el.style.display === 'none' ? 'block' : 'none';
-        });
+        function toggleMatchedItems() {
+          const collapseElement = document.getElementById('matched-collapse');
+          const button = event.target.closest('.btn.accent');
+          
+          if (collapseElement.style.display === 'none') {
+            collapseElement.style.display = 'block';
+            button.innerHTML = '<i class="mdi mdi-eye-off"></i> Hide Matched Items';
+          } else {
+            collapseElement.style.display = 'none';
+            button.innerHTML = '<i class="mdi mdi-check-decagram"></i> Show Matched Items';
+          }
+        }
       </script>
     {% endif %}
 
