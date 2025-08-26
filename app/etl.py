@@ -16,6 +16,15 @@ BATCH_SIZE = 1000
 FUZZY_MATCH_THRESHOLD = float(os.getenv('FUZZY_MATCH_THRESHOLD', '80.0'))
 AUTO_RESOLVE_THRESHOLD = float(os.getenv('AUTO_RESOLVE_THRESHOLD', '95.0'))  # Higher threshold for auto-resolution
 
+# Enhanced scoring penalty configuration
+LENGTH_PENALTY_MULTIPLIER = float(os.getenv('LENGTH_PENALTY_MULTIPLIER', '30.0'))  # Length difference penalty
+WORD_COUNT_PENALTY_MULTIPLIER = float(os.getenv('WORD_COUNT_PENALTY_MULTIPLIER', '10.0'))  # Word count difference penalty
+DIETARY_TERMS_PENALTY = float(os.getenv('DIETARY_TERMS_PENALTY', '20.0'))  # Dietary terms mismatch penalty
+SPECIAL_CHARS_PENALTY = float(os.getenv('SPECIAL_CHARS_PENALTY', '15.0'))  # Special characters mismatch penalty
+NUMBERS_PENALTY = float(os.getenv('NUMBERS_PENALTY', '15.0'))  # Numbers mismatch penalty
+ALGORITHM_DISAGREEMENT_PENALTY = float(os.getenv('ALGORITHM_DISAGREEMENT_PENALTY', '15.0'))  # Algorithm disagreement penalty
+ALGORITHM_DISAGREEMENT_THRESHOLD = float(os.getenv('ALGORITHM_DISAGREEMENT_THRESHOLD', '20.0'))  # Threshold for algorithm disagreement
+
 def validate_excel_file(file_path):
     """Validate Excel file before processing to prevent zip file errors"""
     try:
@@ -54,6 +63,50 @@ def get_fuzzy_match_threshold():
 def get_auto_resolve_threshold():
     """Get auto-resolution threshold from environment or use default"""
     return AUTO_RESOLVE_THRESHOLD
+
+def apply_match_penalties(text_sanitized, match_name, raw_score):
+    """
+    Apply consistent penalties to any match score based on the enhanced scoring system.
+    This ensures both best matches and alternatives use the same penalty logic.
+    """
+    adjusted_score = raw_score
+    
+    # Penalty 1: Length difference penalty
+    length_diff = abs(len(text_sanitized) - len(match_name))
+    max_length = max(len(text_sanitized), len(match_name))
+    length_penalty = (length_diff / max_length) * LENGTH_PENALTY_MULTIPLIER
+    adjusted_score -= length_penalty
+    
+    # Penalty 2: Word count difference penalty
+    text_word_count = len(text_sanitized.split())
+    match_word_count = len(match_name.split())
+    word_diff = abs(text_word_count - match_word_count)
+    word_penalty = min(word_diff * WORD_COUNT_PENALTY_MULTIPLIER, 25)
+    adjusted_score -= word_penalty
+    
+    # Penalty 3: Dietary terms penalty
+    dietary_terms = ['gluten-free', 'organic', 'natural', 'raw', 'extra virgin', 'whole grain']
+    text_has_dietary = any(term in text_sanitized.lower() for term in dietary_terms)
+    match_has_dietary = any(term in match_name.lower() for term in dietary_terms)
+    if text_has_dietary != match_has_dietary:
+        adjusted_score -= DIETARY_TERMS_PENALTY
+    
+    # Penalty 4: Special characters penalty
+    text_special_chars = sum(1 for c in text_sanitized if c in '!@#$%^&*()')
+    match_special_chars = sum(1 for c in match_name if c in '!@#$%^&*()')
+    if text_special_chars != match_special_chars:
+        adjusted_score -= SPECIAL_CHARS_PENALTY
+    
+    # Penalty 5: Numbers penalty
+    text_has_numbers = any(c.isdigit() for c in text_sanitized)
+    match_has_numbers = any(c.isdigit() for c in match_name)
+    if text_has_numbers != match_has_numbers:
+        adjusted_score -= NUMBERS_PENALTY
+    
+    # Ensure score doesn't go below 0
+    adjusted_score = max(0.0, adjusted_score)
+    
+    return adjusted_score
 
 def sanitize_string(value):
     """Sanitize string input to prevent XSS and injection attacks"""
@@ -318,31 +371,90 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                         ni.resolved = True
                         current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) exact matched existing canonical [{ext_id}]")
                     else:
-                        best = process.extractOne(text_sanitized, pool, scorer=fuzz.token_set_ratio, processor=utils.default_process)
-                        name0, score0 = (best[0], float(best[1])) if best else (None, 0.0)
+                        # Enhanced fuzzy matching with penalty-based ranking
+                        # Get all potential matches with raw scores
+                        all_matches = process.extract(text_sanitized, pool, scorer=fuzz.token_set_ratio, processor=utils.default_process, limit=10)
+                        
+                        # Apply penalties to all matches and find the best one
+                        penalized_matches = []
+                        best_match = None
+                        best_adjusted_score = 0.0
+                        
+                        for match_name, raw_score, _ in all_matches:
+                            # Additional scoring algorithms for cross-validation (only for the best raw match)
+                            if match_name == all_matches[0][0]:  # Only for the raw best match
+                                best_ratio = process.extractOne(text_sanitized, [match_name], scorer=fuzz.ratio, processor=utils.default_process)
+                                ratio_score = float(best_ratio[1]) if best_ratio else 0.0
+                                
+                                best_partial = process.extractOne(text_sanitized, [match_name], scorer=fuzz.partial_ratio, processor=utils.default_process)
+                                partial_score = float(best_partial[1]) if best_partial else 0.0
+                                
+                                # Apply penalties including algorithm disagreement
+                                adjusted_score = apply_match_penalties(text_sanitized, match_name, float(raw_score))
+                                
+                                # Additional penalty for algorithm disagreement
+                                score_variance = max(abs(float(raw_score) - ratio_score), abs(float(raw_score) - partial_score))
+                                if score_variance > ALGORITHM_DISAGREEMENT_THRESHOLD:
+                                    adjusted_score -= ALGORITHM_DISAGREEMENT_PENALTY
+                                
+                                current_app.logger.info(f"[etl] Row {idx}: Raw best '{match_name}' raw score: {raw_score:.1f}%, adjusted score: {adjusted_score:.1f}%")
+                            else:
+                                # Apply penalties without algorithm disagreement check
+                                adjusted_score = apply_match_penalties(text_sanitized, match_name, float(raw_score))
+                                current_app.logger.info(f"[etl] Row {idx}: Alternative '{match_name}' raw score: {raw_score:.1f}%, adjusted score: {adjusted_score:.1f}%")
+                            
+                            # Ensure score doesn't go below 0
+                            adjusted_score = max(0.0, adjusted_score)
+                            
+                            penalized_matches.append((match_name, adjusted_score))
+                            
+                            # Track the best adjusted score
+                            if adjusted_score > best_adjusted_score:
+                                best_adjusted_score = adjusted_score
+                                best_match = match_name
+                        
+                        # Now use the best match after penalties
+                        name0 = best_match
+                        final_score = best_adjusted_score
+                        
+                        current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) best match after penalties: '{name0}' (score {final_score:.1f}%)")
                         
                         # Use configurable threshold
                         threshold = get_fuzzy_match_threshold()
                         auto_resolve_threshold = get_auto_resolve_threshold()
                         
-                        if score0 >= auto_resolve_threshold:
-                            # High confidence - auto-resolve
+                        # Simplified logic using adjusted scores - the penalties already handle most edge cases
+                        if final_score >= auto_resolve_threshold:
+                            # High confidence - auto-resolve (penalties already applied)
                             ni.matched_canonical_id = (prod_map if kind == 'product' else ing_map)[name0]
-                            ni.score = score0
+                            ni.score = final_score
                             ni.resolved = True
-                            current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) auto-resolved with '{name0}' (score {score0:.1f}%)")
-                        elif score0 >= threshold:
+                            current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) auto-resolved with '{name0}' (score {final_score:.1f}%)")
+                        elif final_score >= threshold:
                             # Medium confidence - create review but mark as suggested
                             ni.matched_canonical_id = (prod_map if kind == 'product' else ing_map)[name0]
-                            ni.score = score0
+                            ni.score = final_score
                             ni.resolved = False  # Don't auto-resolve, require review
-                            current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) suggested match '{name0}' (score {score0:.1f}%) - requires review")
+                            current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) suggested match '{name0}' (score {final_score:.1f}%) - requires review")
                             
-                            # Create review for suggested match
+                            # Create review for suggested match with alternatives
+                            # Use the already calculated penalized matches as alternatives
+                            alts = []
+                            ext_map = prod_map if kind == 'product' else ing_map
+                            
+                            # Use penalized_matches but exclude the best match
+                            for alt_name, alt_score in penalized_matches:
+                                if alt_name != name0:  # Skip the best match
+                                    alt_ext_id = ext_map.get(alt_name)
+                                    alts.append({"name": alt_name, "score": alt_score, "ext_id": alt_ext_id})
+                                    # Stop when we have 3 alternatives
+                                    if len(alts) >= 3:
+                                        break
+                            
                             mr = MatchReview(
                                 new_item=ni, suggested_name=name0,
                                 suggested_ext_id=(prod_map if kind == 'product' else ing_map)[name0],
-                                score=score0, alternatives=[], approved=None
+                                score=final_score, alternatives=alts, approved=None
                             )
                             db.session.add(mr)
                         else:
@@ -351,23 +463,22 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                             ext_map = prod_map if kind == 'product' else ing_map
                             suggested_ext_id = ext_map.get(name0) if name0 else None
                             
-                            # Get top matches but exclude the suggested match to avoid duplication
-                            for alt_nm, alt_sc, _ in process.extract(text_sanitized, pool, scorer=fuzz.token_set_ratio, processor=utils.default_process, limit=5):
-                                alt_ext_id = ext_map.get(alt_nm)
-                                # Skip if this is the same as the suggested match
-                                if alt_ext_id != suggested_ext_id:
-                                    alts.append({"name": alt_nm, "score": float(alt_sc), "ext_id": alt_ext_id})
-                                # Stop when we have 3 alternatives (excluding the suggested match)
-                                if len(alts) >= 3:
-                                    break
+                            # Use penalized_matches but exclude the best match
+                            for alt_name, alt_score in penalized_matches:
+                                if alt_name != name0:  # Skip the best match
+                                    alt_ext_id = ext_map.get(alt_name)
+                                    alts.append({"name": alt_name, "score": alt_score, "ext_id": alt_ext_id})
+                                    # Stop when we have 3 alternatives
+                                    if len(alts) >= 3:
+                                        break
                                     
                             current_app.logger.info(
-                                f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) no good match found (score {score0:.1f}%), will require review. Top guess: '{name0}'."
+                                f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) no good match found (score {final_score:.1f}%), will require review. Top guess: '{name0}'."
                             )
                             mr = MatchReview(
                                 new_item=ni, suggested_name=name0 or text_sanitized,
                                 suggested_ext_id=suggested_ext_id,
-                                score=score0, alternatives=alts, approved=None
+                                score=final_score, alternatives=alts, approved=None
                             )
                             db.session.add(mr)
                     db.session.add(ni)
