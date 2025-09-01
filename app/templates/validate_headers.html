@@ -1,0 +1,628 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2><i class="mdi mdi-file-check"></i> Header Validation & Mapping</h2>
+  <p>Review and confirm how your file headers map to the Member schema fields.</p>
+  
+  <div class="file-info">
+    <h4>File: {{ filename }}</h4>
+    <div class="validation-summary">
+      <div class="validation-item {% if validation.is_valid %}success{% else %}error{% endif %}">
+        <i class="mdi mdi-{% if validation.is_valid %}check-circle{% else %}alert-circle{% endif %}"></i>
+        <span>
+          {% if validation.is_valid %}
+            All required columns are mapped correctly!
+          {% else %}
+            Missing required columns: {{ validation.missing_fields|join(', ') }}
+          {% endif %}
+        </span>
+      </div>
+      <div class="validation-stats">
+        <span>Headers: {{ validation.total_headers }}</span>
+        <span>Mapped: {{ validation.mapped_headers }}</span>
+        <span>Unmapped: {{ validation.total_headers - validation.mapped_headers }}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header Mapping Section -->
+  <div class="mapping-section">
+    <h4><i class="mdi mdi-arrow-right-bold"></i> Header Mapping</h4>
+    <p>Review how your file headers map to schema fields. You can modify the mapping if needed.</p>
+    
+    <div class="mapping-table">
+      <div class="mapping-header">
+        <div class="col">File Header</div>
+        <div class="col">Schema Field</div>
+        <div class="col">Confidence</div>
+        <div class="col">Actions</div>
+      </div>
+      
+      {% for header in headers %}
+      <div class="mapping-row">
+        <div class="col file-header">{{ header }}</div>
+        <div class="col schema-field">
+          {% if header in mapping %}
+                         <select class="field-mapping" data-header="{{ header }}" title="Map header '{{ header }}' to schema field">
+               <option value="{{ mapping[header].schema_field }}" selected>
+                 {{ mapping[header].schema_field }}
+               </option>
+               {% for field, variations in schema_fields.items() %}
+                 {% if field != mapping[header].schema_field %}
+                   <option value="{{ field }}">{{ field }}</option>
+                 {% endif %}
+               {% endfor %}
+               <option value="__unmapped__">-- Unmapped --</option>
+             </select>
+          {% else %}
+                         <select class="field-mapping" data-header="{{ header }}" title="Map header '{{ header }}' to schema field">
+               <option value="__unmapped__" selected>-- Unmapped --</option>
+               {% for field, variations in schema_fields.items() %}
+                 <option value="{{ field }}">{{ field }}</option>
+               {% endfor %}
+             </select>
+          {% endif %}
+        </div>
+        <div class="col confidence">
+          {% if header in mapping %}
+            <span class="confidence-score {{ mapping[header].confidence|confidence_class }}">
+              {{ mapping[header].confidence }}%
+            </span>
+          {% else %}
+            <span class="confidence-score unmapped">0%</span>
+          {% endif %}
+        </div>
+        <div class="col actions">
+          {% if header in mapping %}
+            <span class="status mapped">
+              <i class="mdi mdi-check"></i> Mapped
+            </span>
+          {% else %}
+            <span class="status unmapped">
+              <i class="mdi mdi-alert"></i> Unmapped
+            </span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Data Preview Section -->
+  <div class="preview-section">
+    <h4><i class="mdi mdi-eye"></i> Data Preview (First 10 Rows)</h4>
+    <p>Preview how your data will look after normalization and mapping.</p>
+    
+    <div class="data-preview">
+      {% if sample_data %}
+        <div class="preview-table">
+          <div class="preview-header">
+            {% for field in sample_data[0].keys() %}
+              <div class="preview-col">{{ field }}</div>
+            {% endfor %}
+          </div>
+          {% for row in sample_data %}
+            <div class="preview-row">
+              {% for field, value in row.items() %}
+                <div class="preview-col">
+                  {% if value %}
+                    <span class="value">{{ value }}</span>
+                  {% else %}
+                    <span class="empty">(empty)</span>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="no-preview">
+          <i class="mdi mdi-information"></i>
+          <span>No preview data available</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Action Buttons -->
+  <!-- Hidden CSRF token field -->
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" id="csrf-token-field">
+  
+  <div class="action-buttons">
+    <button type="button" class="btn secondary" onclick="updateMapping()">
+      <i class="mdi mdi-refresh"></i> Update Preview
+    </button>
+    
+    {% if validation.is_valid %}
+      <button type="button" class="btn primary" onclick="processFile()">
+        <i class="mdi mdi-play"></i> Process File
+      </button>
+    {% else %}
+      <button type="button" class="btn primary" disabled title="Fix missing required columns first">
+        <i class="mdi mdi-play"></i> Process File
+      </button>
+    {% endif %}
+    
+    <a href="{{ url_for('main.upload_file') }}" class="btn secondary">
+      <i class="mdi mdi-arrow-left"></i> Back to Upload
+    </a>
+  </div>
+</div>
+
+<script>
+// Store schema fields for reference
+const schemaFields = {{ schema_fields|tojson }};
+
+// Update mapping when user changes field selections
+document.querySelectorAll('.field-mapping').forEach(select => {
+  select.addEventListener('change', function() {
+    updateMapping();
+  });
+  
+  // Ensure the selected value is visible on page load
+  if (select.value && select.value !== '__unmapped__') {
+    select.classList.add('mapped');
+  } else {
+    select.classList.add('unmapped');
+  }
+  
+  // Add animation class for smooth transitions
+  select.addEventListener('change', function() {
+    this.classList.add('selection-changed');
+    setTimeout(() => this.classList.remove('selection-changed'), 200);
+  });
+});
+
+function updateMapping() {
+  const mapping = {};
+  
+  // Collect all mappings
+  document.querySelectorAll('.field-mapping').forEach(select => {
+    const header = select.dataset.header;
+    const schemaField = select.value;
+    
+    if (schemaField !== '__unmapped__') {
+      mapping[header] = schemaField;
+    }
+  });
+  
+  console.log('Collected mapping:', mapping);
+  
+  // Create a form to submit the mapping data
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '{{ url_for("main.update_mapping") }}';
+  form.style.display = 'none';
+  
+  // Add CSRF token
+  const csrfToken = document.getElementById('csrf-token-field').value;
+  const csrfInput = document.createElement('input');
+  csrfInput.type = 'hidden';
+  csrfInput.name = 'csrf_token';
+  csrfInput.value = csrfToken;
+  form.appendChild(csrfInput);
+  
+  // Add mapping data
+  const mappingInput = document.createElement('input');
+  mappingInput.type = 'hidden';
+  mappingInput.name = 'mapping';
+  mappingInput.value = JSON.stringify(mapping);
+  form.appendChild(mappingInput);
+  
+  // Submit the form
+  document.body.appendChild(form);
+  form.submit();
+}
+
+function updateValidationStatus(validation) {
+  const validationItem = document.querySelector('.validation-item');
+  const validationStats = document.querySelector('.validation-stats');
+  
+  // Update validation message
+  if (validation.is_valid) {
+    validationItem.className = 'validation-item success';
+    validationItem.innerHTML = '<i class="mdi mdi-check-circle"></i><span>All required columns are mapped correctly!</span>';
+  } else {
+    validationItem.className = 'validation-item error';
+    validationItem.innerHTML = '<i class="mdi mdi-alert-circle"></i><span>Missing required columns: ' + validation.missing_fields.join(', ') + '</span>';
+  }
+  
+  // Update stats
+  validationStats.innerHTML = `
+    <span>Headers: ${validation.total_headers}</span>
+    <span>Mapped: ${validation.mapped_headers}</span>
+    <span>Unmapped: ${validation.total_headers - validation.mapped_headers}</span>
+  `;
+  
+  // Update process button state
+  const processBtn = document.querySelector('.action-buttons .btn.primary');
+  if (validation.is_valid) {
+    processBtn.disabled = false;
+    processBtn.title = '';
+  } else {
+    processBtn.disabled = true;
+    processBtn.title = 'Fix missing required columns first';
+  }
+}
+
+function updateDataPreview(sampleData) {
+  const dataPreview = document.querySelector('.data-preview');
+  
+  if (sampleData && sampleData.length > 0) {
+    const fields = Object.keys(sampleData[0]);
+    
+    const previewHTML = `
+      <div class="preview-table">
+        <div class="preview-header">
+          ${fields.map(field => `<div class="preview-col">${field}</div>`).join('')}
+        </div>
+        ${sampleData.map(row => `
+          <div class="preview-row">
+            ${fields.map(field => `
+              <div class="preview-col">
+                ${row[field] ? `<span class="value">${row[field]}</span>` : '<span class="empty">(empty)</span>'}
+              </div>
+            `).join('')}
+          </div>
+        `).join('')}
+      </div>
+    `;
+    
+    dataPreview.innerHTML = previewHTML;
+  } else {
+    dataPreview.innerHTML = `
+      <div class="no-preview">
+        <i class="mdi mdi-information"></i>
+        <span>No preview data available</span>
+      </div>
+    `;
+  }
+}
+
+function updateMappingDisplay(mapping) {
+  // Update confidence scores and status indicators
+  document.querySelectorAll('.field-mapping').forEach(select => {
+    const header = select.dataset.header;
+    const row = select.closest('.mapping-row');
+    const confidenceCol = row.querySelector('.confidence');
+    const actionsCol = row.querySelector('.actions');
+    
+         // Update visual state of dropdown
+     if (select.value && select.value !== '__unmapped__') {
+       select.classList.remove('unmapped');
+       select.classList.add('mapped');
+     } else {
+       select.classList.remove('mapped');
+       select.classList.add('unmapped');
+     }
+    
+    if (header in mapping) {
+      const schemaField = mapping[header].schema_field;
+      const confidence = mapping[header].confidence;
+      
+      // Update confidence score
+      confidenceCol.innerHTML = `<span class="confidence-score ${getConfidenceClass(confidence)}">${confidence}%</span>`;
+      
+      // Update status
+      actionsCol.innerHTML = '<span class="status mapped"><i class="mdi mdi-check"></i> Mapped</span>';
+    } else {
+      // Unmapped
+      confidenceCol.innerHTML = '<span class="confidence-score unmapped">0%</span>';
+      actionsCol.innerHTML = '<span class="status unmapped"><i class="mdi mdi-alert"></i> Unmapped</span>';
+    }
+  });
+}
+
+function getConfidenceClass(confidence) {
+  if (confidence >= 90) return 'high';
+  if (confidence >= 70) return 'medium';
+  return 'low';
+}
+
+// Simple function to ensure dropdowns are properly styled
+function ensureDropdownStyling() {
+  document.querySelectorAll('.field-mapping').forEach(select => {
+    if (select.value && select.value !== '__unmapped__') {
+      select.classList.remove('unmapped');
+      select.classList.add('mapped');
+    } else {
+      select.classList.remove('mapped');
+      select.classList.add('unmapped');
+    }
+  });
+}
+
+// Call this function periodically to maintain styling
+setInterval(ensureDropdownStyling, 1000);
+
+function processFile() {
+  if (confirm('Are you sure you want to process this file with the current mapping?')) {
+    // Create a form and submit it
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '{{ url_for("main.process_validated_file") }}';
+    
+    // Add CSRF token
+    const csrfToken = document.createElement('input');
+    csrfToken.type = 'hidden';
+    csrfToken.name = 'csrf_token';
+    csrfToken.value = '{{ csrf_token() }}';
+    form.appendChild(csrfToken);
+    
+    document.body.appendChild(form);
+    form.submit();
+  }
+}
+</script>
+
+<style>
+.validation-summary {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.validation-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+.validation-item.success {
+  color: var(--success);
+}
+
+.validation-item.error {
+  color: var(--danger);
+}
+
+.validation-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.mapping-section, .preview-section {
+  margin: 2rem 0;
+}
+
+.mapping-table {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.mapping-header {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr 1fr;
+  background: var(--accent);
+  color: white;
+  font-weight: 500;
+  padding: 0.75rem;
+}
+
+.mapping-row {
+  display: grid;
+  grid-template-columns: 2fr 2fr 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem;
+  align-items: center;
+}
+
+.mapping-row:last-child {
+  border-bottom: none;
+}
+
+.mapping-row:nth-child(even) {
+  background: var(--bg);
+}
+
+.col {
+  padding: 0.25rem;
+}
+
+/* Make schema field column more prominent */
+.col.schema-field {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 0.5rem;
+}
+
+.field-mapping {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--card-bg) !important;
+  color: var(--text) !important;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+.field-mapping:hover {
+  border-color: var(--accent);
+  background: var(--bg) !important;
+  transform: translateY(-1px);
+}
+
+.field-mapping:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(74, 124, 89, 0.3);
+}
+
+/* Ensure dropdown options are visible */
+.field-mapping option {
+  background: var(--card-bg) !important;
+  color: var(--text) !important;
+  padding: 0.5rem;
+  font-weight: 500;
+  border: none;
+}
+
+.field-mapping option:hover {
+  background: var(--accent) !important;
+  color: white !important;
+}
+
+/* Style for selected option */
+.field-mapping option:checked {
+  background: var(--accent) !important;
+  color: white !important;
+  font-weight: 600;
+}
+
+/* Visual states for mapped vs unmapped */
+.field-mapping.mapped {
+  border-color: var(--success);
+}
+
+.field-mapping.unmapped {
+  border-color: var(--danger);
+}
+
+/* Simple selection change animation */
+.field-mapping.selection-changed {
+  animation: selectionPulse 0.2s ease-in-out;
+}
+
+@keyframes selectionPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+/* Simple dropdown arrow */
+.field-mapping {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 0.5rem center !important;
+  background-size: 1em !important;
+  padding-right: 2rem !important;
+}
+
+.confidence-score {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.confidence-score.high {
+  background: rgba(76, 175, 80, 0.1);
+  color: var(--success);
+}
+
+.confidence-score.medium {
+  background: rgba(255, 193, 7, 0.1);
+  color: #ffc107;
+}
+
+.confidence-score.low {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--danger);
+}
+
+.confidence-score.unmapped {
+  background: rgba(158, 158, 158, 0.1);
+  color: var(--muted);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.status.mapped {
+  color: var(--success);
+}
+
+.status.unmapped {
+  color: var(--danger);
+}
+
+.data-preview {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.preview-table {
+  width: 100%;
+}
+
+.preview-header {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  background: var(--accent);
+  color: white;
+  font-weight: 500;
+  padding: 0.75rem;
+  position: sticky;
+  top: 0;
+}
+
+.preview-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem;
+}
+
+.preview-row:nth-child(even) {
+  background: var(--bg);
+}
+
+.preview-col {
+  padding: 0.25rem;
+  word-break: break-word;
+}
+
+.value {
+  color: var(--text);
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.no-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  color: var(--muted);
+  text-align: center;
+  justify-content: center;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+</style>
+{% endblock %}

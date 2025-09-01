@@ -6,21 +6,33 @@ import requests
 import logging
 import time
 import json
+import openpyxl
 from pathlib import Path
 from flask import (
     Blueprint, render_template, request, redirect,
     url_for, flash, current_app, get_flashed_messages,
-    send_from_directory, session, abort
+    send_from_directory, session, abort, jsonify
 )
 from werkzeug.utils import secure_filename
 from app import db
 from app.models import NewItem, MatchReview, MemberSubmission, Member
-from app.etl import process_submission_file
+from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample
 
 main_bp = Blueprint('main', __name__)
 
 UPLOAD_FOLDER = os.path.join(os.getcwd(), 'seed_data', 'new_submissions')
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
+
+# Custom Jinja filters
+@main_bp.app_template_filter('confidence_class')
+def confidence_class_filter(confidence):
+    """Convert confidence score to CSS class"""
+    if confidence >= 90:
+        return 'high'
+    elif confidence >= 70:
+        return 'medium'
+    else:
+        return 'low'
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -80,6 +92,10 @@ def upload_file():
             file.save(save_path)
             current_app.logger.info(f"[upload] File uploaded and saved to: {save_path}")
 
+            # Store file info in session for validation flow
+            session['uploaded_file'] = filename
+            session['file_path'] = save_path
+
             if clear_previous:
                 current_app.logger.info("[upload] Clearing previous submissions and DB records…")
                 MatchReview.query.delete()
@@ -89,68 +105,275 @@ def upload_file():
                 db.session.commit()
                 current_app.logger.info("[upload] Previous DB records cleared.")
 
-            try:
-                current_app.logger.info(f"[upload] Starting ETL process for file: {filename}")
-                count, val_errors, valid_row_indices = process_submission_file(filename)
-                current_app.logger.info(f"[upload] ETL finished for {filename}: {count} items, {len(val_errors)} validation errors")
-            except Exception as e:
-                current_app.logger.error(f"[upload][error] {e}")
-                error_msg = str(e)
-                
-                # Provide helpful guidance for Excel file errors
-                if "File is not a zip file" in error_msg or "not a zip file" in error_msg or "BadZipFile" in error_msg:
-                    flash(
-                        f"Excel file error: {error_msg}\n\n"
-                        f"💡 Tip: Try converting your Excel file to CSV format:\n"
-                        f"1. Open the file in Excel\n"
-                        f"2. Go to File → Save As\n"
-                        f"3. Choose 'CSV (Comma delimited) (*.csv)'\n"
-                        f"4. Upload the CSV file instead", 
-                        "danger"
-                    )
-                else:
-                    flash(f"Upload failed: {e}", "danger")
-                return redirect(url_for('main.upload_file'))
-
-            # If *all* rows were invalid
-            if count == 0:
-                error_filename = f"{filename.rsplit('.',1)[0]}_errors.csv"
-                error_path = os.path.join(UPLOAD_FOLDER, error_filename)
-                current_app.logger.warning(f"[upload] All rows invalid for {filename}. Writing errors to: {error_path}")
-                with open(error_path, 'w', newline='', encoding='utf-8') as ef:
-                    writer = csv.writer(ef)
-                    writer.writerow(['Row','Error'])
-                    for err in val_errors:
-                        writer.writerow([err['row'], err['error']])
-                return render_template(
-                    'etl_errors.html',
-                    submission=filename,
-                    errors=val_errors,
-                    error_filename=error_filename
-                )
-
-            # Store validation errors in session for banner/download on review page
-            if val_errors:
-                session['etl_validation_errors'] = val_errors
-                session['etl_error_filename'] = f"{filename.rsplit('.',1)[0]}_errors.csv"
-                error_path = os.path.join(UPLOAD_FOLDER, session['etl_error_filename'])
-                current_app.logger.warning(f"[upload] Some rows were skipped. Writing ETL error report to: {error_path}")
-                with open(error_path, 'w', newline='', encoding='utf-8') as ef:
-                    writer = csv.writer(ef)
-                    writer.writerow(['Row','Error'])
-                    for err in val_errors:
-                        writer.writerow([err['row'], err['error']])
-                flash(f"Some rows were skipped due to validation errors. See details on the review page.", "warning")
-
-            current_app.logger.info(f"[upload] Successfully processed {count} valid items from {filename}")
-            flash(f"Uploaded and processed “{filename}” ({count} valid items). Ready for review.", "success")
-            return redirect(url_for('main.review_list'))
+            # Redirect to validation page instead of processing immediately
+            flash(f"File '{filename}' uploaded successfully. Please review the header mapping and data sample before processing.", "success")
+            return redirect(url_for('main.validate_headers'))
 
         current_app.logger.warning("[upload] No valid file selected or invalid file type.")
         flash("Please select a valid .xlsx, .xls or .csv file.", "danger")
 
     current_app.logger.info("[upload] GET received. Rendering upload.html")
     return render_template('upload.html')
+
+@main_bp.route('/validate_headers')
+def validate_headers():
+    """Show header mapping and validation results"""
+    filename = session.get('uploaded_file')
+    file_path = session.get('file_path')
+    
+    if not filename or not file_path:
+        flash("No file uploaded. Please upload a file first.", "danger")
+        return redirect(url_for('main.upload_file'))
+    
+    if not os.path.exists(file_path):
+        flash("Uploaded file not found. Please upload again.", "danger")
+        return redirect(url_for('main.upload_file'))
+    
+    try:
+        # Extract headers from file
+        ext = filename.lower().rsplit('.', 1)[1]
+        headers = []
+        
+        if ext == 'csv':
+            with open(file_path, encoding='utf-8', newline='') as f:
+                reader = csv.reader(f)
+                headers = next(reader, [])
+        elif ext in ['xlsx', 'xls']:
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            sheet = wb.active
+            header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+            headers = [h if h else '' for h in header_row]
+            wb.close()
+        
+        # Check if we have updated mapping from session
+        updated_mapping = session.get('updated_mapping')
+        updated_validation = session.get('updated_validation')
+        updated_sample_data = session.get('updated_sample_data')
+        
+        if updated_mapping and updated_validation and updated_sample_data:
+            # Use updated data from session
+            mapping = updated_mapping
+            validation = updated_validation
+            sample_data = updated_sample_data
+            unmapped = [h for h in headers if h not in mapping]
+            
+            # Clear session data
+            session.pop('updated_mapping', None)
+            session.pop('updated_validation', None)
+            session.pop('updated_sample_data', None)
+        else:
+            # Use automatic mapping
+            mapping, unmapped = map_headers_to_schema(headers)
+            validation = validate_required_columns(headers, mapping)
+            sample_data = normalize_data_sample(file_path, headers, mapping, sample_size=10)
+        
+        # Get schema fields for template
+        from app.etl import get_schema_field_mapping
+        schema_fields = get_schema_field_mapping()
+        
+        return render_template(
+            'validate_headers.html',
+            filename=filename,
+            headers=headers,
+            mapping=mapping,
+            unmapped=unmapped,
+            validation=validation,
+            sample_data=sample_data,
+            schema_fields=schema_fields
+        )
+        
+    except Exception as e:
+        current_app.logger.error(f"Error validating headers: {e}")
+        error_msg = str(e)
+        
+        # Provide specific guidance for Excel file errors
+        if "Bad offset for central directory" in error_msg or "BadZipFile" in error_msg:
+            flash(
+                f"Excel file error: {error_msg}\n\n"
+                f"💡 This usually means the Excel file is corrupted. Please try:\n\n"
+                f"**Option 1: Re-save the file**\n"
+                f"1. Open the file in Microsoft Excel or Google Sheets\n"
+                f"2. Go to File → Save As\n"
+                f"3. Choose 'Excel Workbook (.xlsx)'\n"
+                f"4. Save and upload the new file\n\n"
+                f"**Option 2: Convert to CSV**\n"
+                f"1. Open the file in Excel/Google Sheets\n"
+                f"2. Go to File → Save As\n"
+                f"3. Choose 'CSV (Comma delimited) (*.csv)'\n"
+                f"4. Upload the CSV file instead", 
+                "danger"
+            )
+        elif "File is not a zip file" in error_msg or "not a zip file" in error_msg:
+            flash(
+                f"Excel file error: {error_msg}\n\n"
+                f"💡 This usually means the file extension doesn't match its actual format.\n\n"
+                f"Please try:\n"
+                f"1. Opening the file in Excel to verify it's actually an Excel file\n"
+                f"2. Re-saving it as .xlsx format\n"
+                f"3. Or converting it to CSV format", 
+                "danger"
+            )
+        else:
+            flash(f"Error validating file: {error_msg}", "danger")
+        
+        return redirect(url_for('main.upload_file'))
+
+@main_bp.route('/update_mapping', methods=['POST'])
+def update_mapping():
+    """Update header mapping based on user input"""
+    current_app.logger.info(f"[update_mapping] POST received. Form data: {request.form}")
+    current_app.logger.info(f"[update_mapping] Is JSON: {request.is_json}")
+    
+    filename = session.get('uploaded_file')
+    file_path = session.get('file_path')
+    
+    if not filename or not file_path:
+        current_app.logger.error("[update_mapping] No file uploaded")
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    try:
+        # Handle both form data and JSON data
+        if request.is_json:
+            data = request.get_json()
+            custom_mapping = data.get('mapping', {})
+        else:
+            # Handle form data
+            mapping_json = request.form.get('mapping', '{}')
+            try:
+                custom_mapping = json.loads(mapping_json)
+            except json.JSONDecodeError:
+                return jsonify({'error': 'Invalid mapping data format'}), 400
+        
+        # Store custom mapping in session
+        session['custom_mapping'] = custom_mapping
+        
+        # Re-validate with custom mapping
+        ext = filename.lower().rsplit('.', 1)[1]
+        headers = []
+        
+        if ext == 'csv':
+            with open(file_path, encoding='utf-8', newline='') as f:
+                reader = csv.reader(f)
+                headers = next(reader, [])
+        elif ext in ['xlsx', 'xls']:
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            sheet = wb.active
+            header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+            headers = [h if h else '' for h in header_row]
+            wb.close()
+        
+        # Apply custom mapping
+        mapping = {}
+        for header in headers:
+            if header in custom_mapping:
+                mapping[header] = {
+                    'schema_field': custom_mapping[header],
+                    'confidence': 100,  # User-defined mapping
+                    'original_header': header
+                }
+        
+        # Validate required columns
+        validation = validate_required_columns(headers, mapping)
+        
+        # Generate updated data sample
+        sample_data = normalize_data_sample(file_path, headers, mapping, sample_size=10)
+        
+        # Store the updated data in session for the next page load
+        session['updated_mapping'] = mapping
+        session['updated_validation'] = validation
+        session['updated_sample_data'] = sample_data
+        
+        # Redirect back to validation page with updated data
+        flash('Mapping updated successfully!', 'success')
+        return redirect(url_for('main.validate_headers'))
+        
+    except Exception as e:
+        current_app.logger.error(f"Error updating mapping: {e}")
+        error_msg = str(e)
+        
+        # Provide specific guidance for Excel file errors
+        if "Bad offset for central directory" in error_msg or "BadZipFile" in error_msg:
+            return jsonify({
+                'error': 'Excel file is corrupted. Please re-save the file in Excel or convert to CSV format.'
+            }), 500
+        else:
+            return jsonify({'error': str(e)}), 500
+
+@main_bp.route('/process_validated_file', methods=['POST'])
+def process_validated_file():
+    """Process the file after validation and mapping confirmation"""
+    filename = session.get('uploaded_file')
+    file_path = session.get('file_path')
+    
+    if not filename or not file_path:
+        flash("No file uploaded. Please upload a file first.", "danger")
+        return redirect(url_for('main.upload_file'))
+    
+    try:
+        # Get custom mapping from session
+        custom_mapping = session.get('custom_mapping', {})
+        current_app.logger.info(f"[process_validated_file] Starting ETL process for validated file: {filename}")
+        current_app.logger.info(f"[process_validated_file] Custom mapping: {custom_mapping}")
+        count, val_errors, valid_row_indices = process_submission_file(filename, custom_mapping=custom_mapping)
+        current_app.logger.info(f"[process_validated_file] ETL finished for {filename}: {count} items, {len(val_errors)} validation errors")
+        
+        # Clear session data
+        session.pop('uploaded_file', None)
+        session.pop('file_path', None)
+        session.pop('custom_mapping', None)
+        
+        # Handle results similar to original upload flow
+        if count == 0:
+            error_filename = f"{filename.rsplit('.',1)[0]}_errors.csv"
+            error_path = os.path.join(UPLOAD_FOLDER, error_filename)
+            current_app.logger.warning(f"[process_validated_file] All rows invalid for {filename}. Writing errors to: {error_path}")
+            with open(error_path, 'w', newline='', encoding='utf-8') as ef:
+                writer = csv.writer(ef)
+                writer.writerow(['Row','Error'])
+                for err in val_errors:
+                    writer.writerow([err['row'], err['error']])
+            return render_template(
+                'etl_errors.html',
+                submission=filename,
+                errors=val_errors,
+                error_filename=error_filename
+            )
+
+        # Store validation errors in session for banner/download on review page
+        if val_errors:
+            session['etl_validation_errors'] = val_errors
+            session['etl_error_filename'] = f"{filename.rsplit('.',1)[0]}_errors.csv"
+            error_path = os.path.join(UPLOAD_FOLDER, session['etl_error_filename'])
+            current_app.logger.warning(f"[process_validated_file] Some rows were skipped. Writing ETL error report to: {error_path}")
+            with open(error_path, 'w', newline='', encoding='utf-8') as ef:
+                writer = csv.writer(ef)
+                writer.writerow(['Row','Error'])
+                for err in val_errors:
+                    writer.writerow([err['row'], err['error']])
+            flash(f"Some rows were skipped due to validation errors. See details on the review page.", "warning")
+
+        current_app.logger.info(f"[process_validated_file] Successfully processed {count} valid items from {filename}")
+        flash(f"Uploaded and processed '{filename}' ({count} valid items). Ready for review.", "success")
+        return redirect(url_for('main.review_list'))
+
+    except Exception as e:
+        current_app.logger.error(f"[process_validated_file][error] {e}")
+        error_msg = str(e)
+        
+        # Provide helpful guidance for Excel file errors
+        if "File is not a zip file" in error_msg or "not a zip file" in error_msg or "BadZipFile" in error_msg:
+            flash(
+                f"Excel file error: {error_msg}\n\n"
+                f"💡 Tip: Try converting your Excel file to CSV format:\n"
+                f"1. Open the file in Excel\n"
+                f"2. Go to File → Save As\n"
+                f"3. Choose 'CSV (Comma delimited) (*.csv)'\n"
+                f"4. Upload the CSV file instead", 
+                "danger"
+            )
+        else:
+            flash(f"Processing failed: {e}", "danger")
+        return redirect(url_for('main.validate_headers'))
 
 @main_bp.route('/download_etl_errors')
 def download_etl_errors():
@@ -234,6 +457,8 @@ def handle_review(item_id):
     review = MatchReview.query.filter_by(new_item_id=item_id, approved=None).first()
     if not review:
         current_app.logger.warning(f"[handle_review] Review item {item_id} not found or already handled.")
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': 'Review item not found or already handled.'})
         flash("Review item not found or already handled.", "warning")
         return redirect(url_for('main.review_list'))
 
@@ -243,49 +468,69 @@ def handle_review(item_id):
     
     current_app.logger.info(f"[handle_review] Canonical choices: {canonical_choices}, Single choice: {single_choice}")
 
-    if canonical_choices:
-        # User selected one or more canonical matches
-        review.approved = True
-        review.new_item.resolved = True
-        
-        # Store multiple canonical IDs as JSON in a new field
-        # For now, we'll use the first choice as the primary match
-        # and store the rest in the alternatives field
-        primary_choice = canonical_choices[0]
-        review.new_item.matched_canonical_id = primary_choice
-        
-        # Store all selected choices in alternatives for future reference
-        all_choices = [{"ext_id": choice, "selected": True} for choice in canonical_choices]
-        review.alternatives = all_choices
-        
-        flash(f"Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical item(s).", "success")
-        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical items: {canonical_choices}")
-        
-    elif single_choice == '__new__':
-        # User chose to create as new item
-        review.approved = True
-        review.new_item.resolved = False  # Mark as unresolved so it gets created as new
-        # Don't set matched_canonical_id since we want it as a new item
-        flash(f"Approved '{review.new_item.name}' as new {review.new_item.type}.", "success")
-        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' as new {review.new_item.type}")
-        
-    elif single_choice and single_choice != '__new__':
-        # User chose a single canonical match (backward compatibility)
-        review.approved = True
-        review.new_item.resolved = True
-        review.new_item.matched_canonical_id = single_choice
-        flash(f"Approved '{review.new_item.name}' matched to canonical data.", "success")
-        current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to canonical ID: {single_choice}")
-        
-    else:
-        # No choice made - treat as ignored
-        review.approved = False
-        review.new_item.ignored = True
-        flash(f"Ignored '{review.new_item.name}'.", "warning")
-        current_app.logger.info(f"[handle_review] Ignored review for item '{review.new_item.name}'")
+    try:
+        if canonical_choices:
+            # User selected one or more canonical matches
+            review.approved = True
+            review.new_item.resolved = True
+            
+            # Store multiple canonical IDs as JSON in a new field
+            # For now, we'll use the first choice as the primary match
+            # and store the rest in the alternatives field
+            primary_choice = canonical_choices[0]
+            review.new_item.matched_canonical_id = primary_choice
+            
+            # Store all selected choices in alternatives for future reference
+            all_choices = [{"ext_id": choice, "selected": True} for choice in canonical_choices]
+            review.alternatives = all_choices
+            
+            message = f"Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical item(s)."
+            current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to {len(canonical_choices)} canonical items: {canonical_choices}")
+            
+        elif single_choice == '__new__':
+            # User chose to create as new item
+            review.approved = True
+            review.new_item.resolved = False  # Mark as unresolved so it gets created as new
+            # Don't set matched_canonical_id since we want it as a new item
+            message = f"Approved '{review.new_item.name}' as new {review.new_item.type}."
+            current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' as new {review.new_item.type}")
+            
+        elif single_choice and single_choice != '__new__':
+            # User chose a single canonical match (backward compatibility)
+            review.approved = True
+            review.new_item.resolved = True
+            review.new_item.matched_canonical_id = single_choice
+            message = f"Approved '{review.new_item.name}' matched to canonical data."
+            current_app.logger.info(f"[handle_review] Approved '{review.new_item.name}' matched to canonical ID: {single_choice}")
+            
+        else:
+            # No choice made - treat as ignored
+            review.approved = False
+            review.new_item.ignored = True
+            message = f"Ignored '{review.new_item.name}'."
+            current_app.logger.info(f"[handle_review] Ignored review for item '{review.new_item.name}'")
 
-    db.session.commit()
-    return redirect(url_for('main.review_list'))
+        db.session.commit()
+        
+        # Return JSON for AJAX requests, redirect for regular requests
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': True, 'message': message})
+        
+        # Only set flash message for non-AJAX requests
+        flash(message, "success")
+        return redirect(url_for('main.review_list'))
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"[handle_review] Error processing review: {e}")
+        error_message = f"Error processing review: {str(e)}"
+        
+        # Return JSON for AJAX requests, redirect for regular requests
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': error_message})
+        
+        flash(error_message, "error")
+        return redirect(url_for('main.review_list'))
 
 @main_bp.route('/reviews/ignore_review_item/<int:item_id>', methods=['POST'])
 def ignore_review_item(item_id):
@@ -293,15 +538,37 @@ def ignore_review_item(item_id):
     review = MatchReview.query.filter_by(new_item_id=item_id, approved=None).first()
     if not review:
         current_app.logger.warning(f"[ignore_review_item] Review item {item_id} not found or already handled.")
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': 'Review item not found or already handled.'})
         flash("Review item not found or already handled.", "warning")
         return redirect(url_for('main.review_list'))
 
-    review.approved = False
-    review.new_item.ignored = True
-    db.session.commit()
-    flash(f"Ignored “{review.new_item.name}”.", "warning")
-    current_app.logger.info(f"[ignore_review_item] Ignored review for item '{review.new_item.name}'")
-    return redirect(url_for('main.review_list'))
+    try:
+        review.approved = False
+        review.new_item.ignored = True
+        db.session.commit()
+        
+        message = f"Ignored '{review.new_item.name}'."
+        current_app.logger.info(f"[ignore_review_item] Ignored review for item '{review.new_item.name}'")
+        
+        # Return JSON for AJAX requests, redirect for regular requests
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': True, 'message': message})
+        
+        flash(message, "warning")
+        return redirect(url_for('main.review_list'))
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"[ignore_review_item] Error ignoring review: {e}")
+        error_message = f"Error ignoring review: {str(e)}"
+        
+        # Return JSON for AJAX requests, redirect for regular requests
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': error_message})
+        
+        flash(error_message, "error")
+        return redirect(url_for('main.review_list'))
 
 @main_bp.route('/reviews/batch_save_decisions', methods=['POST'])
 def batch_save_decisions():
@@ -729,6 +996,8 @@ def push_to_dgraph():
                     arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
                     for pr in arr:
                         new_product_ids.append(pr["productID"])
+                        # Add member association note
+                        pr["note"] = f"Created with existing member '{biz}'"
                         results["products"].append(pr)
                     current_app.logger.info(f"[push] Created {len(new_product_ids)} new products for existing member '{biz}'")
 
@@ -745,6 +1014,8 @@ def push_to_dgraph():
                     arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
                     for ing in arr:
                         new_ingredient_ids.append(ing["ingredientID"])
+                        # Add member association note
+                        ing["note"] = f"Created with existing member '{biz}'"
                         results["ingredients"].append(ing)
                     current_app.logger.info(f"[push] Created {len(new_ingredient_ids)} new ingredients for existing member '{biz}'")
 
@@ -898,6 +1169,8 @@ def push_to_dgraph():
                 arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
                 for pr in arr:
                     new_product_ids.append(pr["productID"])
+                    # Add member association note to avoid duplication
+                    pr["note"] = f"Created with member '{biz}'"
                     results["products"].append(pr)
                 current_app.logger.info(f"[push] Created {len(new_product_ids)} new products for member '{biz}'")
             
@@ -914,6 +1187,8 @@ def push_to_dgraph():
                 arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
                 for ing in arr:
                     new_ingredient_ids.append(ing["ingredientID"])
+                    # Add member association note to avoid duplication
+                    ing["note"] = f"Created with member '{biz}'"
                     results["ingredients"].append(ing)
                 current_app.logger.info(f"[push] Created {len(new_ingredient_ids)} new ingredients for member '{biz}'")
 
@@ -968,24 +1243,8 @@ def push_to_dgraph():
                 results["members"].extend(arr)
                 current_app.logger.info(f"[push] Created new member '{biz}' in Dgraph")
                 
-                # Add newly created products and ingredients to results for reporting
-                if new_product_names:
-                    for product_name in new_product_names:
-                        results["products"].append({
-                            "title": product_name,
-                            "productID": f"new_product_{len(results['products'])}",
-                            "note": f"Created with member '{biz}'"
-                        })
-                    current_app.logger.info(f"[push] Added {len(new_product_names)} new products to results for '{biz}'")
-                
-                if new_ingredient_names:
-                    for ingredient_name in new_ingredient_names:
-                        results["ingredients"].append({
-                            "title": ingredient_name,
-                            "ingredientID": f"new_ingredient_{len(results['ingredients'])}",
-                            "note": f"Created with member '{biz}'"
-                        })
-                    current_app.logger.info(f"[push] Added {len(new_ingredient_names)} new ingredients to results for '{biz}'")
+                # Note: Products and ingredients are already added to results when created above
+                # No need to add them again here to avoid duplication
             else:
                 err = resp_json.get("errors", [{"message": "Unknown Dgraph error"}])
                 error_msg = err[0].get('message', 'Unknown Dgraph error')

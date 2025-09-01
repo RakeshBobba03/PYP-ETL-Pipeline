@@ -25,6 +25,214 @@ NUMBERS_PENALTY = float(os.getenv('NUMBERS_PENALTY', '15.0'))  # Numbers mismatc
 ALGORITHM_DISAGREEMENT_PENALTY = float(os.getenv('ALGORITHM_DISAGREEMENT_PENALTY', '15.0'))  # Algorithm disagreement penalty
 ALGORITHM_DISAGREEMENT_THRESHOLD = float(os.getenv('ALGORITHM_DISAGREEMENT_THRESHOLD', '20.0'))  # Threshold for algorithm disagreement
 
+# Schema field mappings for header validation
+MEMBER_SCHEMA_FIELDS = {
+    'companyBio': ['companybio', 'company_bio', 'bio', 'business_bio', 'description', 'about', 'company description', 'business description', 'company bio'],
+    'businessName': ['businessname', 'business_name', 'company_name', 'company', 'name', 'business'],
+    'country1': ['country1', 'country', 'country_1', 'nation', 'location'],
+    'contactEmail': ['contactemail', 'contact_email', 'email', 'e-mail', 'mail', 'contact'],
+    'streetAddress1': ['streetaddress1', 'street_address1', 'address', 'street', 'address1', 'street1'],
+    'city1': ['city1', 'city', 'city_1', 'town', 'municipality'],
+    'products': ['products', 'product', 'product_list', 'items', 'goods'],
+    'ingredients': ['ingredients', 'ingredient', 'ingredient_list', 'components', 'materials']
+}
+
+def get_schema_field_mapping():
+    """Get the schema field mapping for header validation"""
+    return MEMBER_SCHEMA_FIELDS
+
+def map_headers_to_schema(headers):
+    """
+    Automatically map incoming headers to Member schema fields.
+    Returns a mapping of incoming header -> schema field and any unmapped headers.
+    """
+    if not headers:
+        return {}, []
+    
+    # Normalize headers for comparison
+    normalized_headers = [h.strip().lower() if h else '' for h in headers]
+    
+    # Debug logging
+    try:
+        from flask import current_app
+        current_app.logger.info(f"[map_headers_to_schema] Headers: {headers}")
+        current_app.logger.info(f"[map_headers_to_schema] Normalized headers: {normalized_headers}")
+    except:
+        pass  # In case we're not in Flask context
+    
+    mapping = {}
+    unmapped = []
+    
+    for header, normalized_header in zip(headers, normalized_headers):
+        if not normalized_header:
+            unmapped.append(header)
+            continue
+            
+        # Try to find a match in schema fields
+        best_match = None
+        best_score = 0
+        
+        # Debug logging for this header
+        try:
+            from flask import current_app
+            current_app.logger.info(f"[map_headers_to_schema] Processing header: '{header}' (normalized: '{normalized_header}')")
+        except:
+            pass
+        
+        for schema_field, variations in MEMBER_SCHEMA_FIELDS.items():
+            for variation in variations:
+                # Exact match
+                if normalized_header == variation:
+                    best_match = schema_field
+                    best_score = 100
+                    break
+                # Fuzzy match
+                score = fuzz.ratio(normalized_header, variation)
+                if score > best_score and score > 60:  # Lower threshold for fuzzy matching
+                    best_score = score
+                    best_match = schema_field
+                
+                # Debug logging for fuzzy matches
+                try:
+                    from flask import current_app
+                    if normalized_header == 'company bio':  # Only log for the problematic header
+                        current_app.logger.info(f"[map_headers_to_schema] '{normalized_header}' vs '{variation}': score={score}")
+                except:
+                    pass
+            
+            if best_score == 100:  # Exact match found, no need to check other fields
+                break
+        
+        if best_match and best_score >= 60:
+            mapping[header] = {
+                'schema_field': best_match,
+                'confidence': best_score,
+                'original_header': header
+            }
+            # Debug logging for successful mapping
+            try:
+                from flask import current_app
+                current_app.logger.info(f"[map_headers_to_schema] Mapped '{header}' -> '{best_match}' (score: {best_score})")
+            except:
+                pass
+        else:
+            unmapped.append(header)
+            # Debug logging for unmapped headers
+            try:
+                from flask import current_app
+                current_app.logger.info(f"[map_headers_to_schema] Unmapped '{header}' (best score: {best_score})")
+            except:
+                pass
+    
+    return mapping, unmapped
+
+def validate_required_columns(headers, mapping):
+    """
+    Validate that all required columns are present in the mapped headers.
+    Returns validation result and missing columns.
+    """
+    required_fields = ['businessName', 'country1', 'contactEmail', 'streetAddress1', 'city1', 'products', 'ingredients', 'companyBio']
+    
+    # Get mapped schema fields
+    mapped_fields = set()
+    for header_info in mapping.values():
+        if isinstance(header_info, dict) and 'schema_field' in header_info:
+            mapped_fields.add(header_info['schema_field'])
+    
+    # Check for missing required fields
+    missing_fields = []
+    for field in required_fields:
+        if field not in mapped_fields:
+            missing_fields.append(field)
+    
+    is_valid = len(missing_fields) == 0
+    
+    return {
+        'is_valid': is_valid,
+        'missing_fields': missing_fields,
+        'mapped_fields': list(mapped_fields),
+        'total_headers': len(headers),
+        'mapped_headers': len(mapping)
+    }
+
+def normalize_data_sample(file_path, headers, mapping, sample_size=10):
+    """
+    Generate a normalized data sample for preview.
+    Returns the first N rows with normalized data according to the mapping.
+    """
+    sample_data = []
+    
+    try:
+        ext = file_path.lower().rsplit('.', 1)[1]
+        
+        if ext == 'csv':
+            with open(file_path, encoding='utf-8', newline='') as f:
+                reader = csv.DictReader(f)
+                for i, row in enumerate(reader):
+                    if i >= sample_size:
+                        break
+                    
+                    normalized_row = normalize_row_data(row, headers, mapping)
+                    sample_data.append(normalized_row)
+                    
+        elif ext in ['xlsx', 'xls']:
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            sheet = wb.active
+            
+            # Skip header row
+            for i, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+                if i > sample_size + 1:  # +1 because we start from row 2
+                    break
+                
+                # Convert row to dict-like structure
+                row_dict = {}
+                for j, header in enumerate(headers):
+                    if j < len(row):
+                        row_dict[header] = row[j]
+                    else:
+                        row_dict[header] = None
+                
+                normalized_row = normalize_row_data(row_dict, headers, mapping)
+                sample_data.append(normalized_row)
+            
+            wb.close()
+    
+    except Exception as e:
+        current_app.logger.error(f"Error generating data sample: {e}")
+        return []
+    
+    return sample_data
+
+def normalize_row_data(row, headers, mapping):
+    """
+    Normalize a single row of data according to the header mapping.
+    Returns normalized data with schema field names.
+    """
+    normalized = {}
+    
+    for header in headers:
+        if header in mapping and isinstance(mapping[header], dict):
+            schema_field = mapping[header]['schema_field']
+            value = row.get(header, '')
+            
+            # Normalize the value
+            if value is not None:
+                value = str(value).strip()
+                if value.lower() in ('', 'null', 'none', 'n/a', 'na', 'nan'):
+                    value = ''
+            
+            normalized[schema_field] = value
+        else:
+            # Unmapped header - store with original name
+            value = row.get(header, '')
+            if value is not None:
+                value = str(value).strip()
+                if value.lower() in ('', 'null', 'none', 'n/a', 'na', 'nan'):
+                    value = ''
+            normalized[f"unmapped_{header}"] = value
+    
+    return normalized
+
 def validate_excel_file(file_path):
     """Validate Excel file before processing to prevent zip file errors"""
     try:
@@ -137,7 +345,7 @@ def validate_email(email):
         return False, "Invalid email format"
     return True, None
 
-def process_submission_file(filename):
+def process_submission_file(filename, custom_mapping=None):
     """
     Load a new submission, validate each row, skip bad ones,
     return (count, validation_errors, valid_row_indices)
@@ -157,7 +365,7 @@ def process_submission_file(filename):
         
         try:
             # Process the file
-            result = _process_file_content(filename, sub)
+            result = _process_file_content(filename, sub, custom_mapping)
             # If we get here, processing succeeded, so commit
             return result
         except Exception as e:
@@ -165,26 +373,38 @@ def process_submission_file(filename):
             current_app.logger.error(f"[etl] Error processing {filename}: {e}")
             raise
 
-def _process_file_content(filename, submission):
+def _process_file_content(filename, submission, custom_mapping=None):
     """Process the actual file content (separated for better error handling)"""
     data_dir = os.path.join(os.getcwd(), 'seed_data', 'new_submissions')
     fp = os.path.join(data_dir, filename)
     ext = filename.lower().rsplit('.', 1)[1]
 
+    # Use custom mapping if provided
+    
     # Prepare reader + helper - process row by row to avoid memory issues
     if ext == 'csv':
         f = open(fp, encoding='utf-8', newline='')
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
-        get = lambda r, c: r.get(c)
+        
+        # Apply custom mapping if available
+        if custom_mapping:
+            # Create reverse mapping: schema_field -> original_header
+            reverse_mapping = {v: k for k, v in custom_mapping.items()}
+            current_app.logger.info(f"[etl] Custom mapping applied: {custom_mapping}")
+            current_app.logger.info(f"[etl] Reverse mapping: {reverse_mapping}")
+            get = lambda r, c: r.get(reverse_mapping.get(c, c))
+        else:
+            get = lambda r, c: r.get(c)
+            
         # Process CSV row by row
-        return _process_csv_rows(reader, headers, get, submission)
+        return _process_csv_rows(reader, headers, get, submission, custom_mapping)
     elif ext in ['xlsx', 'xls']:
-        return _process_excel_file_safe(fp, filename, submission)
+        return _process_excel_file_safe(fp, filename, submission, custom_mapping)
     else:
         raise ValueError(f"Unsupported file format: {ext}. Only .csv, .xlsx, and .xls files are supported.")
 
-def _process_excel_file_safe(file_path, filename, submission):
+def _process_excel_file_safe(file_path, filename, submission, custom_mapping=None):
     """Safely process Excel files with multiple fallback methods"""
     # First, try to validate the file
     is_valid, validation_msg = validate_excel_file(file_path)
@@ -200,10 +420,19 @@ def _process_excel_file_safe(file_path, filename, submission):
             
         header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
         headers = [h if h else '' for h in header_row]
-        get = lambda r, c: r[headers.index(c)] if c in headers else None
+        
+        # Apply custom mapping if available
+        if custom_mapping:
+            # Create reverse mapping: schema_field -> original_header
+            reverse_mapping = {v: k for k, v in custom_mapping.items()}
+            current_app.logger.info(f"[etl] Excel custom mapping applied: {custom_mapping}")
+            current_app.logger.info(f"[etl] Excel reverse mapping: {reverse_mapping}")
+            get = lambda r, c: r[headers.index(reverse_mapping.get(c, c))] if reverse_mapping.get(c, c) in headers else None
+        else:
+            get = lambda r, c: r[headers.index(c)] if c in headers else None
         
         # Process Excel row by row
-        result = _process_excel_rows(sheet, headers, get, submission)
+        result = _process_excel_rows(sheet, headers, get, submission, custom_mapping)
         wb.close()
         return result
         
@@ -230,21 +459,36 @@ def _process_excel_file_safe(file_path, filename, submission):
         else:
             raise ValueError(f"Error reading Excel file '{filename}': {error_msg}")
 
-def _process_csv_rows(reader, headers, get, submission):
+def _process_csv_rows(reader, headers, get, submission, custom_mapping=None):
     """Process CSV rows one by one to avoid memory issues"""
-    return _process_rows_generator(reader, headers, get, submission, is_csv=True)
+    return _process_rows_generator(reader, headers, get, submission, is_csv=True, custom_mapping=custom_mapping)
 
-def _process_excel_rows(sheet, headers, get, submission):
+def _process_excel_rows(sheet, headers, get, submission, custom_mapping=None):
     """Process Excel rows one by one to avoid memory issues"""
-    return _process_rows_generator(sheet.iter_rows(min_row=2, values_only=True), headers, get, submission, is_csv=False)
+    return _process_rows_generator(sheet.iter_rows(min_row=2, values_only=True), headers, get, submission, is_csv=False, custom_mapping=custom_mapping)
 
-def _process_rows_generator(rows_generator, headers, get, submission, is_csv=True):
+def _process_rows_generator(rows_generator, headers, get, submission, is_csv=True, custom_mapping=None):
     """Generic row processor that handles both CSV and Excel data"""
     # Must have these columns in the file
-    for col in ('businessName', 'country1', 'products', 'ingredients'):
-        if col not in headers:
-            current_app.logger.error(f"[etl] File missing required column: {col}")
-            raise ValueError(f"Missing required column: {col}")
+    required_columns = ['businessName', 'country1', 'contactEmail', 'streetAddress1', 'city1', 'products', 'ingredients']
+    
+    # Check if we have custom mapping
+    if custom_mapping:
+        # Use custom mapping to find required columns
+        mapped_headers = set()
+        for header, schema_field in custom_mapping.items():
+            mapped_headers.add(schema_field)
+        
+        for col in required_columns:
+            if col not in mapped_headers:
+                current_app.logger.error(f"[etl] File missing required column: {col}")
+                raise ValueError(f"Missing required column: {col}")
+    else:
+        # Use original header validation
+        for col in required_columns:
+            if col not in headers:
+                current_app.logger.error(f"[etl] File missing required column: {col}")
+                raise ValueError(f"Missing required column: {col}")
 
     current_app.logger.info(f"[etl] Starting processing (columns: {headers})")
 

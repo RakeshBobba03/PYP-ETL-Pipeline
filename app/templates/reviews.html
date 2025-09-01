@@ -35,22 +35,22 @@
   </div>
 
   <!-- Review Statistics -->
-  <div class="review-stats">
-    <div class="stat-card">
-      <div class="stat-number">{{ pending_reviews|length }}</div>
-      <div class="stat-label">Pending Reviews</div>
+  <div class="review-stats" style="display: flex !important; flex-direction: row !important; gap: 1rem !important; margin-bottom: 1.5rem !important; align-items: center !important; justify-content: flex-start !important; flex-wrap: wrap !important; background: rgba(139, 179, 57, 0.05) !important; padding: 0.75rem !important; border-radius: 6px !important; border: 1px solid rgba(139, 179, 57, 0.1) !important;">
+    <div class="stat-card" style="background: var(--card-bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; padding: 0.75rem 1rem !important; text-align: center !important; min-width: 90px !important; margin: 0 !important; flex-shrink: 0 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;">
+      <div class="stat-number" style="color: var(--primary) !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|length }}</div>
+      <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">Pending Reviews</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-number">{{ pending_reviews|selectattr('new_item.type', 'equalto', 'product')|list|length }}</div>
-      <div class="stat-label">Products</div>
+    <div class="stat-card" style="background: var(--card-bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; padding: 0.75rem 1rem !important; text-align: center !important; min-width: 90px !important; margin: 0 !important; flex-shrink: 0 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;">
+      <div class="stat-number" style="color: var(--accent) !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|selectattr('new_item.type', 'equalto', 'product')|list|length }}</div>
+      <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">Products</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-number">{{ pending_reviews|selectattr('new_item.type', 'equalto', 'ingredient')|list|length }}</div>
-      <div class="stat-label">Ingredients</div>
+    <div class="stat-card" style="background: var(--card-bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; padding: 0.75rem 1rem !important; text-align: center !important; min-width: 90px !important; margin: 0 !important; flex-shrink: 0 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;">
+      <div class="stat-number" style="color: #d4a574 !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|selectattr('new_item.type', 'equalto', 'ingredient')|list|length }}</div>
+      <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">Ingredients</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-number">{{ pending_reviews|selectattr('score', 'ge', 80)|list|length }}</div>
-      <div class="stat-label">High Confidence</div>
+    <div class="stat-card" style="background: var(--card-bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; padding: 0.75rem 1rem !important; text-align: center !important; min-width: 90px !important; margin: 0 !important; flex-shrink: 0 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;">
+      <div class="stat-number" style="color: #8b9dc3 !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|selectattr('score', 'ge', 80)|list|length }}</div>
+      <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">High Confidence</div>
     </div>
   </div>
 
@@ -137,7 +137,8 @@
       <div class="card mb-4 review-item" 
            data-type="{{ review.new_item.type }}"
            data-confidence="{{ 'high' if review.score >= 80 else 'medium' if review.score >= 60 else 'low' }}"
-           data-name="{{ review.new_item.name.lower() }}">
+            data-name="{{ review.new_item.name.lower() }}"
+            data-item-id="{{ review.new_item_id }}">
         <div class="review-header">
           <div class="item-info">
             <h3 class="card-title">
@@ -173,89 +174,92 @@
           </p>
         </div>
 
-                 <p class="card-text">
-           Select one or more matches from your canonical data, mark as new, or ignore this item:
-         </p>
-         
-         <!-- Canonical matches form with Save Decision button -->
-         <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
-               method="post" style="margin-bottom:.5rem;" id="review-form-{{ review.new_item_id }}">
-           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-           
-           <!-- Canonical Matches Section -->
-           <div class="matches-section">
-             <h5 style="color: var(--text); margin-bottom: 0.5rem;">
-               <i class="mdi mdi-link-variant"></i> Canonical Matches (Select one or more):
-             </h5>
-             <ul class="checkbox-list">
-               <!-- Top suggestion -->
-               {% if review.suggested_ext_id %}
-               <li>
-                 <label class="match-option">
-                   <input type="checkbox"
-                          name="canonical_choices"
-                          value="{{ review.suggested_ext_id }}"
-                          class="canonical-checkbox"
-                          data-form-id="{{ review.new_item_id }}">
-                   <strong>{{ review.suggested_name }}</strong>
-                   <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
-                   <span style="color: var(--accent); font-size: 0.8rem;">← Best Match</span>
-                 </label>
-               </li>
-               {% endif %}
-               
-               <!-- Alternatives -->
-               {% for alt in review.alternatives %}
-               <li style="padding-left:1.5rem;">
-                 <label class="match-option">
-                   <input type="checkbox"
-                          name="canonical_choices"
-                          value="{{ alt.ext_id }}"
-                          class="canonical-checkbox"
-                          data-form-id="{{ review.new_item_id }}">
-                   {{ alt.name }}
-                   <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
-                 </label>
-               </li>
-               {% endfor %}
-             </ul>
-           </div>
-           
-           <div class="form-validation" style="margin-top: 1rem; padding: 0.5rem; border-radius: 4px; display: none;" id="validation-{{ review.new_item_id }}">
-             <p style="margin: 0; color: #e85a5a; font-size: 0.9rem;">
-               <i class="mdi mdi-alert-circle"></i> 
-               <span id="validation-text-{{ review.new_item_id }}">Please select at least one canonical match before submitting, or use "Create New" button.</span>
-             </p>
-           </div>
-           
-           <button type="submit" class="btn accent" id="submit-btn-{{ review.new_item_id }}">
-             <i class="mdi mdi-content-save"></i>
-             Save Decision
-           </button>
-         </form>
-         
-         <!-- New Item Section -->
-         <div class="new-item-section" style="margin-top: 1rem;">
-           <h5 style="color: var(--text); margin-bottom: 0.5rem;">
-             <i class="mdi mdi-plus-circle"></i> Or Create New:
-           </h5>
-           <p style="margin: 0; color: var(--muted); font-size: 0.9rem;">
-             If no canonical matches are suitable, create a new {{ review.new_item.type }} in Dgraph:
-           </p>
-         </div>
-         
-         <!-- Separate form for creating new item -->
-         <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
-               method="post" style="margin-bottom:.5rem;">
-           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-           <input type="hidden" name="choice" value="__new__">
-           <button type="submit" class="btn primary" style="margin-top: 1rem; margin-bottom: 1.5rem;">
-             <i class="mdi mdi-plus-circle"></i>
-             Create New {{ review.new_item.type|capitalize }}
-           </button>
-         </form>
+        <p class="card-text">
+          Select one or more matches from your canonical data, mark as new, or ignore this item:
+        </p>
         
-        <form action="{{ url_for('main.ignore_review_item', item_id=review.new_item_id) }}" method="post">
+        <!-- Canonical matches form with Save Decision button -->
+        <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+               method="post" style="margin-bottom:.5rem;" id="review-form-{{ review.new_item_id }}"
+               onsubmit="return handleFormSubmit(event, this);">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          
+          <!-- Canonical Matches Section -->
+          <div class="matches-section">
+            <h5 style="color: var(--text); margin-bottom: 0.5rem;">
+              <i class="mdi mdi-link-variant"></i> Canonical Matches (Select one or more):
+            </h5>
+            <ul class="checkbox-list">
+              <!-- Top suggestion -->
+              {% if review.suggested_ext_id %}
+              <li>
+                <label class="match-option">
+                  <input type="checkbox"
+                         name="canonical_choices"
+                         value="{{ review.suggested_ext_id }}"
+                         class="canonical-checkbox"
+                         data-form-id="{{ review.new_item_id }}">
+                  <strong>{{ review.suggested_name }}</strong>
+                  <span class="muted">({{ "%.2f"|format(review.score) }}%)</span>
+                  <span style="color: var(--accent); font-size: 0.8rem;">← Best Match</span>
+                </label>
+              </li>
+              {% endif %}
+              
+              <!-- Alternatives -->
+              {% for alt in review.alternatives %}
+              <li style="padding-left:1.5rem;">
+                <label class="match-option">
+                  <input type="checkbox"
+                         name="canonical_choices"
+                         value="{{ alt.ext_id }}"
+                         class="canonical-checkbox"
+                         data-form-id="{{ review.new_item_id }}">
+                  {{ alt.name }}
+                  <span class="muted">({{ "%.2f"|format(alt.score) }}%)</span>
+                </label>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          
+          <div class="form-validation" style="margin-top: 1rem; padding: 0.5rem; border-radius: 4px; display: none;" id="validation-{{ review.new_item_id }}">
+            <p style="margin: 0; color: #e85a5a; font-size: 0.9rem;">
+              <i class="mdi mdi-alert-circle"></i> 
+              <span id="validation-text-{{ review.new_item_id }}">Please select at least one canonical match before submitting, or use "Create New" button.</span>
+            </p>
+          </div>
+          
+          <button type="submit" class="btn accent" id="submit-btn-{{ review.new_item_id }}">
+            <i class="mdi mdi-content-save"></i>
+            Save Decision
+          </button>
+        </form>
+        
+        <!-- New Item Section -->
+        <div class="new-item-section" style="margin-top: 1rem;">
+          <h5 style="color: var(--text); margin-bottom: 0.5rem;">
+            <i class="mdi mdi-plus-circle"></i> Or Create New:
+          </h5>
+          <p style="margin: 0; color: var(--muted); font-size: 0.9rem;">
+            If no canonical matches are suitable, create a new {{ review.new_item.type }} in Dgraph:
+          </p>
+        </div>
+        
+        <!-- Separate form for creating new item -->
+        <form action="{{ url_for('main.handle_review', item_id=review.new_item_id) }}"
+                method="post" style="margin-bottom:.5rem;" class="create-new-form"
+                onsubmit="return handleFormSubmit(event, this);">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="choice" value="__new__">
+          <button type="submit" class="btn primary" style="margin-top: 1rem; margin-bottom: 1.5rem;">
+            <i class="mdi mdi-plus-circle"></i>
+            Create New {{ review.new_item.type|capitalize }}
+          </button>
+        </form>
+        
+        <form action="{{ url_for('main.ignore_review_item', item_id=review.new_item_id) }}" method="post" class="ignore-form"
+             onsubmit="return handleFormSubmit(event, this);">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn" style="color:#e85a5a; border-color:#e85a5a; background:none; margin-top:.3rem;">
             <i class="mdi mdi-trash-can-outline"></i> Ignore / Remove this item
@@ -276,71 +280,142 @@
 {% endblock %}
 
 <script>
-// Event listeners are now set up in the base template
-console.log('Reviews page loaded - filters should be working!');
+// Clean, non-duplicated JavaScript for reviews page
 
-// Simple form validation for canonical choices
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('[DOMContentLoaded] Setting up form validation...');
+// Toast notification system
+function showReviewToast(message, type = 'info') {
+    // Remove existing toasts to prevent stacking
+    const existingToasts = document.querySelectorAll('.toast-notification');
+    existingToasts.forEach(toast => toast.remove());
     
-    // Handle canonical checkbox changes for validation
-    document.querySelectorAll('.canonical-checkbox').forEach(function(checkbox) {
-        checkbox.addEventListener('change', function(e) {
-            const formId = this.getAttribute('data-form-id');
-            console.log(`[Event] Canonical checkbox changed for form ${formId}: ${this.value}, checked: ${this.checked}`);
-            validateForm(formId);
-        });
-    });
-
-    // Handle form submissions for canonical choices
-    document.querySelectorAll('form[id^="review-form-"]').forEach(function(form) {
-        form.addEventListener('submit', function(e) {
-            const formId = this.id.replace('review-form-', '');
-            const canonicalChoices = this.querySelectorAll('input[name="canonical_choices"]:checked');
-            
-            console.log(`[Submit] Form ${formId} - Canonical choices: ${canonicalChoices.length}`);
-            
-            // Simple validation - must have at least one canonical choice selected
-            if (canonicalChoices.length === 0) {
-                e.preventDefault();
-                console.log(`[Submit] No canonical choices selected - preventing submission for form ${formId}`);
-                alert('Please select at least one canonical match before submitting.');
-                return false;
+    const toast = document.createElement('div');
+    toast.className = `toast-notification toast-${type}`;
+    toast.innerHTML = `
+        <div class="toast-content">
+            <i class="mdi mdi-${type === 'success' ? 'check-circle' : type === 'error' ? 'alert-circle' : 'information'}"></i>
+            <span>${message}</span>
+        </div>
+        <button class="toast-close" onclick="this.parentElement.remove()">
+            <i class="mdi mdi-close"></i>
+        </button>
+    `;
+    
+    // Append to body
+    document.body.appendChild(toast);
+    
+    // Position toast at top-right with slide animation
+    toast.style.position = 'fixed';
+    toast.style.top = '20px';
+    toast.style.right = '20px';
+    toast.style.zIndex = '10000';
+    toast.style.transform = 'translateX(100%)';
+    toast.style.transition = 'transform 0.3s ease-out';
+    
+    // Trigger slide-in animation
+    setTimeout(() => {
+        toast.style.transform = 'translateX(0)';
+    }, 10);
+    
+    // Auto-remove with slide-out animation
+    setTimeout(() => {
+        toast.style.transform = 'translateX(100%)';
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.remove();
             }
-        });
-        
-        // Initialize validation for each form
-        const formId = form.id.replace('review-form-', '');
-        validateForm(formId);
-    });
-});
-
-function validateForm(formId) {
-    const canonicalChoices = document.querySelectorAll(`#review-form-${formId} input[name="canonical_choices"]:checked`);
-    const validationDiv = document.getElementById(`validation-${formId}`);
-    const submitBtn = document.getElementById(`submit-btn-${formId}`);
-    const validationText = document.getElementById(`validation-text-${formId}`);
-    
-    // Simple validation - must have at least one canonical choice selected
-    const isValid = canonicalChoices.length > 0;
-    
-    if (!isValid) {
-        validationDiv.style.display = 'block';
-        validationText.textContent = 'Please select at least one canonical match before submitting, or use "Create New" button.';
-        submitBtn.disabled = true;
-        submitBtn.style.opacity = '0.5';
-        submitBtn.style.cursor = 'not-allowed';
-    } else {
-        validationDiv.style.display = 'none';
-        submitBtn.disabled = false;
-        submitBtn.style.opacity = '1';
-        submitBtn.style.cursor = 'pointer';
-    }
-    
-    return isValid;
+        }, 300);
+    }, 4000);
 }
 
-// Quick approve functions (existing)
+// Form submission handler
+function handleFormSubmit(event, form) {
+    console.log('Form submission intercepted:', form.action);
+    event.preventDefault();
+    event.stopPropagation();
+    
+    // Store current scroll position
+    const scrollPos = window.scrollY;
+    
+    const formData = new FormData(form);
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    
+    // Show loading state
+    submitBtn.innerHTML = '<i class="mdi mdi-loading mdi-spin"></i> Processing...';
+    submitBtn.disabled = true;
+    
+    fetch(form.action, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Response:', data);
+        if (data.success) {
+            // Show success message
+            showReviewToast(data.message, 'success');
+            
+            // Remove the review item from the page
+            const itemId = form.id ? form.id.replace('review-form-', '') : 'unknown';
+            const reviewItem = document.querySelector(`[data-item-id="${itemId}"]`);
+            if (reviewItem) {
+                reviewItem.style.opacity = '0';
+                reviewItem.style.transform = 'scale(0.95)';
+                setTimeout(() => {
+                    reviewItem.remove();
+                    updateStats();
+                    // Restore scroll position
+                    window.scrollTo(0, scrollPos);
+                }, 300);
+            } else {
+                // Restore scroll position even if no item found
+                window.scrollTo(0, scrollPos);
+            }
+        } else {
+            showReviewToast(data.message || 'Error occurred', 'error');
+            // Restore scroll position on error
+            window.scrollTo(0, scrollPos);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showReviewToast('Error occurred. Please try again.', 'error');
+        // Restore scroll position on error
+        window.scrollTo(0, scrollPos);
+    })
+    .finally(() => {
+        // Restore button state
+        submitBtn.innerHTML = originalText;
+        submitBtn.disabled = false;
+    });
+    
+    return false;
+}
+
+// Update statistics after removing items
+function updateStats() {
+    const remainingItems = document.querySelectorAll('.review-item').length;
+    const pendingReviewsElement = document.querySelector('.stat-card:nth-child(1) .stat-number');
+    if (pendingReviewsElement) {
+        pendingReviewsElement.textContent = remainingItems;
+    }
+    
+    // Update other stats if needed
+    const productsElement = document.querySelector('.stat-card:nth-child(2) .stat-number');
+    const ingredientsElement = document.querySelector('.stat-card:nth-child(3) .stat-number');
+    
+    if (productsElement && ingredientsElement) {
+        const products = document.querySelectorAll('.review-item[data-type="product"]').length;
+        const ingredients = document.querySelectorAll('.review-item[data-type="ingredient"]').length;
+        productsElement.textContent = products;
+        ingredientsElement.textContent = ingredients;
+    }
+}
+
+// Quick approve function
 function quickApprove(itemId, choice) {
     const form = document.getElementById(`review-form-${itemId}`);
     if (!form) return;
@@ -368,9 +443,8 @@ function quickApprove(itemId, choice) {
         choiceInput.value = '__new__';
         newForm.appendChild(choiceInput);
         
-        // Submit the form
-        document.body.appendChild(newForm);
-        newForm.submit();
+        // Submit via AJAX
+        handleFormSubmit({ preventDefault: () => {}, stopPropagation: () => {} }, newForm);
     } else {
         // Clear all selections first
         form.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
@@ -381,40 +455,209 @@ function quickApprove(itemId, choice) {
             checkbox.checked = true;
         }
         
-        // Validate and submit
-        if (validateForm(itemId)) {
-            form.submit();
-        }
+        // Submit via AJAX
+        handleFormSubmit({ preventDefault: () => {}, stopPropagation: () => {} }, form);
     }
 }
+
+// Form validation
+function validateForm(formId) {
+    const canonicalChoices = document.querySelectorAll(`#review-form-${formId} input[name="canonical_choices"]:checked`);
+    const validationDiv = document.getElementById(`validation-${formId}`);
+    const submitBtn = document.getElementById(`submit-btn-${formId}`);
+    const validationText = document.getElementById(`validation-text-${formId}`);
+    
+    // Simple validation - must have at least one canonical choice selected
+    const isValid = canonicalChoices.length > 0;
+    
+    if (!isValid) {
+        validationDiv.style.display = 'block';
+        validationText.textContent = 'Please select at least one canonical match before submitting, or use "Create New" button.';
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+        submitBtn.style.cursor = 'not-allowed';
+    } else {
+        validationDiv.style.display = 'none';
+        submitBtn.disabled = false;
+        submitBtn.style.opacity = '1';
+        submitBtn.style.cursor = 'pointer';
+    }
+    
+    return isValid;
+}
+
+// Initialize form validation on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Handle canonical checkbox changes for validation
+    document.querySelectorAll('.canonical-checkbox').forEach(function(checkbox) {
+        checkbox.addEventListener('change', function(e) {
+            const formId = this.getAttribute('data-form-id');
+            validateForm(formId);
+        });
+    });
+    
+    // Initialize validation for each form
+    document.querySelectorAll('form[id^="review-form-"]').forEach(function(form) {
+        const formId = form.id.replace('review-form-', '');
+        validateForm(formId);
+    });
+});
 </script>
 
 <style>
+/* Hide flash messages on reviews page to prevent conflicts with toasts */
+.flash-messages {
+  display: none !important;
+}
+
+/* Toast Notification Styles */
+.toast-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 10000;
+  min-width: 300px;
+  border-left: 4px solid var(--primary);
+  transform: translateX(100%);
+  transition: transform 0.3s ease-out;
+  pointer-events: auto;
+}
+
+.toast-success {
+  border-left-color: #4CAF50;
+}
+
+.toast-error {
+  border-left-color: #f44336;
+}
+
+.toast-info {
+  border-left-color: var(--accent);
+}
+
+.toast-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text);
+}
+
+.toast-content i {
+  font-size: 1.2rem;
+}
+
+.toast-success .toast-content i {
+  color: #4CAF50;
+}
+
+.toast-error .toast-content i {
+  color: #f44336;
+}
+
+.toast-info .toast-content i {
+  color: var(--accent);
+}
+
+.toast-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.toast-close:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--text);
+}
+
+/* Enhanced Review Statistics Styling */
 .review-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 1rem !important;
+  margin-bottom: 1.5rem !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  flex-wrap: wrap !important;
+  background: rgba(139, 179, 57, 0.05) !important;
+  padding: 0.75rem !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(139, 179, 57, 0.1) !important;
 }
 
 .stat-card {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 1rem;
-  text-align: center;
+  background: var(--card-bg) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 6px !important;
+  padding: 0.75rem 1rem !important;
+  text-align: center !important;
+  min-width: 90px !important;
+  transition: all 0.2s ease !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+  margin: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+.stat-card:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  border-color: var(--accent) !important;
 }
 
 .stat-number {
-  font-size: 2rem;
-  font-weight: bold;
-  color: var(--accent);
-  margin-bottom: 0.5rem;
+  font-size: 1.75rem !important;
+  font-weight: 700 !important;
+  margin-bottom: 0.25rem !important;
+  line-height: 1 !important;
+}
+
+/* Individual stat number colors */
+.stat-card:nth-child(1) .stat-number {
+  color: var(--primary) !important; /* Theme primary color for Pending Reviews */
+}
+
+.stat-card:nth-child(2) .stat-number {
+  color: var(--accent) !important; /* Theme accent color for Products */
+}
+
+.stat-card:nth-child(3) .stat-number {
+  color: #d4a574 !important; /* Muted warm tone for Ingredients */
+}
+
+.stat-card:nth-child(4) .stat-number {
+  color: #8b9dc3 !important; /* Muted cool tone for High Confidence */
 }
 
 .stat-label {
-  color: var(--muted);
-  font-size: 0.9rem;
+  color: var(--text) !important;
+  font-size: 0.85rem !important;
+  font-weight: 500 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+}
+
+/* Force horizontal layout and prevent wrapping */
+.review-stats > * {
+  flex-shrink: 0 !important;
+  margin: 0 !important;
+}
+
+/* Ensure stats are in a single row */
+.review-stats {
+  overflow-x: auto !important;
+  white-space: nowrap !important;
+  padding: 0.5rem 0 !important;
 }
 
 .batch-actions-section {
@@ -767,7 +1010,30 @@ function quickApprove(itemId, choice) {
     align-self: stretch;
     justify-content: center;
   }
+  
+  /* Responsive stats layout */
+  .review-stats {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: stretch;
+  }
+  
+  .stat-card {
+    min-width: auto;
+    padding: 1rem;
+  }
+  
+  .stat-number {
+    font-size: 2rem;
+  }
+  
+  /* Mobile toast adjustments */
+  .toast-notification {
+    left: 20px;
+    right: 20px;
+    bottom: 20px;
+    top: auto;
+    min-width: auto;
+  }
 }
-
-
 </style>
