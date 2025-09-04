@@ -175,7 +175,7 @@
                 onclick="toggleMatchedItems()"
                 style="width:16rem; font-size:1.05em;">
           <i class="mdi mdi-check-decagram"></i>
-          Show Matched Items
+          Show {{ matched_items|length }} Matched Items
         </button>
         <div id="matched-collapse" style="display:none; background: #171717; padding:1rem; border-radius:4px; margin-top:.5rem; border: 1px solid var(--accent);">
           <h3 style="margin-bottom:1rem; color:var(--primary);">
@@ -190,8 +190,9 @@
                 <strong style="color: var(--primary);">{{ m.name }}</strong> 
                 <span style="color: var(--muted);">({{ m.type|capitalize }})</span> →
                 {% if m.matched_canonical_id %}
-                  <strong style="color: var(--accent);">Matched to Canonical ID</strong>
-                  <span style="color: var(--primary); font-size: 0.8rem; background: rgba(212, 175, 55, 0.1); padding: 0.2rem 0.4rem; border-radius: 3px;">ID: {{ m.matched_canonical_id[:12] }}...</span>
+                  <strong style="color: var(--accent);">Matched to</strong>
+                  <span style="color: var(--primary); font-weight: bold;">"{{ m.canonical_name if m.canonical_name else (m.review.suggested_name if m.review and m.review.suggested_name else 'Unknown') }}"</span>
+                  <span style="color: var(--muted); font-size: 0.8rem; background: rgba(212, 175, 55, 0.1); padding: 0.2rem 0.4rem; border-radius: 3px;">ID: {{ m.matched_canonical_id[:12] }}...</span>
                 {% else %}
                   <em style="color: var(--muted);">No canonical ID set</em>
                 {% endif %}
@@ -214,10 +215,10 @@
           
           if (collapseElement.style.display === 'none') {
             collapseElement.style.display = 'block';
-            button.innerHTML = '<i class="mdi mdi-eye-off"></i> Hide Matched Items';
+            button.innerHTML = '<i class="mdi mdi-eye-off"></i> Hide {{ matched_items|length }} Matched Items';
           } else {
             collapseElement.style.display = 'none';
-            button.innerHTML = '<i class="mdi mdi-check-decagram"></i> Show Matched Items';
+            button.innerHTML = '<i class="mdi mdi-check-decagram"></i> Show {{ matched_items|length }} Matched Items';
           }
         }
       </script>

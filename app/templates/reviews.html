@@ -107,9 +107,23 @@
       <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">Ingredients</div>
     </div>
     <div class="stat-card" style="background: var(--card-bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; padding: 0.75rem 1rem !important; text-align: center !important; min-width: 90px !important; margin: 0 !important; flex-shrink: 0 !important; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;">
-      <div class="stat-number" style="color: #8b9dc3 !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|selectattr('score', 'ge', 80)|list|length }}</div>
+      <div class="stat-number" style="color: #8b9dc3 !important; font-size: 1.75rem !important; font-weight: 700 !important; margin-bottom: 0.25rem !important; line-height: 1 !important;">{{ pending_reviews|selectattr('score', 'ge', 90)|list|length }}</div>
       <div class="stat-label" style="color: var(--text) !important; font-size: 0.75rem !important; font-weight: 500 !important; text-transform: uppercase !important; letter-spacing: 0.3px !important;">High Confidence</div>
     </div>
+  </div>
+
+  <!-- Enhanced Item Summary -->
+  <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 6px; border-left: 3px solid var(--primary); margin-bottom: 1.5rem;">
+    <h4 style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1rem;">
+      <i class="mdi mdi-format-list-bulleted"></i> Complete Item Summary
+    </h4>
+    <p style="margin: 0; color: var(--text); font-size: 0.9rem; line-height: 1.4;">
+      <strong>Items requiring review:</strong> {{ pending_reviews|length }} total items need your decision
+      <br><strong>Breakdown:</strong> {{ pending_reviews|selectattr('new_item.type', 'equalto', 'product')|list|length }} products, {{ pending_reviews|selectattr('new_item.type', 'equalto', 'ingredient')|list|length }} ingredients
+      <br><strong>Confidence levels:</strong> {{ pending_reviews|selectattr('score', 'ge', 90)|list|length }} high confidence (90%+), {{ pending_reviews|selectattr('score', 'ge', 60)|selectattr('score', 'lt', 90)|list|length }} medium (60-89%), {{ pending_reviews|selectattr('score', 'lt', 60)|list|length }} low (<60%)
+                   <br><strong>Source files:</strong> {{ pending_reviews|map(attribute='new_item.member.submission.name')|unique|list|length }} file(s) being processed
+      <br><strong>Businesses involved:</strong> {{ pending_reviews|map(attribute='new_item.member.name')|unique|list|length }} business(es) with items to review
+    </p>
   </div>
 
   <!-- Enhanced Batch Actions -->
@@ -119,7 +133,7 @@
     <div class="batch-actions-grid">
       <div class="batch-action-card">
         <h5>High Confidence Items</h5>
-        <p>Auto-approve items with 90%+ match confidence</p>
+        <p>Auto-approve items with 90%+ match confidence (with semantic validation)</p>
         <form method="post" action="{{ url_for('main.batch_approve_high_confidence') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn accent">
@@ -172,12 +186,32 @@
         </select>
       </div>
       
+               <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+           <label for="file-filter" class="filter-label">File:</label>
+           <select id="file-filter" class="filter-select" title="Filter by source file">
+             <option value="">All Files</option>
+             {% for file_name in pending_reviews|map(attribute='new_item.member.submission.name')|unique|sort %}
+               <option value="{{ file_name }}">{{ file_name }}</option>
+             {% endfor %}
+           </select>
+         </div>
+      
+      <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+        <label for="business-filter" class="filter-label">Business:</label>
+        <select id="business-filter" class="filter-select" title="Filter by business name">
+          <option value="">All Businesses</option>
+          {% for business_name in pending_reviews|map(attribute='new_item.member.name')|unique|sort %}
+            <option value="{{ business_name }}">{{ business_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      
       <div class="filter-group" style="display: flex !important; align-items: center; gap: 0.5rem; flex-shrink: 0;">
         <label for="confidence-filter" class="filter-label">Confidence:</label>
         <select id="confidence-filter" class="filter-select" title="Filter by confidence level">
           <option value="">All Confidence Levels</option>
-          <option value="high">High (80%+)</option>
-          <option value="medium">Medium (60-79%)</option>
+          <option value="high">High (90%+)</option>
+          <option value="medium">Medium (60-89%)</option>
           <option value="low">Low (<60%)</option>
         </select>
       </div>
@@ -192,11 +226,13 @@
   <!-- Review Items -->
   <div id="review-items-container">
     {% for review in pending_reviews %}
-      <div class="card mb-4 review-item" 
-           data-type="{{ review.new_item.type }}"
-           data-confidence="{{ 'high' if review.score >= 80 else 'medium' if review.score >= 60 else 'low' }}"
-            data-name="{{ review.new_item.name.lower() }}"
-            data-item-id="{{ review.new_item_id }}">
+               <div class="card mb-4 review-item"
+              data-type="{{ review.new_item.type }}"
+              data-confidence="{{ 'high' if review.score >= 90 else 'medium' if review.score >= 60 else 'low' }}"
+              data-name="{{ review.new_item.name.lower() }}"
+              data-file="{{ review.new_item.member.submission.name if review.new_item.member and review.new_item.member.submission else 'Unknown' }}"
+              data-business="{{ review.new_item.member.name if review.new_item.member else 'Unknown' }}"
+              data-item-id="{{ review.new_item_id }}">
         <div class="review-header">
           <div class="item-info">
             <h3 class="card-title">
@@ -205,7 +241,7 @@
             <span class="type-label {{ review.new_item.type|lower }}">
               {{ review.new_item.type|capitalize }}
             </span>
-            <span class="confidence-badge confidence-{{ 'high' if review.score >= 80 else 'medium' if review.score >= 60 else 'low' }}">
+            <span class="confidence-badge confidence-{{ 'high' if review.score >= 90 else 'medium' if review.score >= 60 else 'low' }}">
               {{ "%.1f"|format(review.score) if review.score else 'N/A' }}%
             </span>
           </div>
@@ -226,7 +262,8 @@
         <!-- Item Context -->
         <div class="item-context">
           <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
-            <strong>Source:</strong> {{ review.new_item.submission.name if review.new_item.submission else 'Unknown' }} | 
+            <strong>Source:</strong> {{ review.new_item.member.submission.name if review.new_item.member and review.new_item.member.submission else 'Unknown' }} | 
+            <strong>Business:</strong> {{ review.new_item.member.name if review.new_item.member else 'Unknown' }} | 
             <strong>Type:</strong> {{ review.new_item.type|capitalize }} | 
             <strong>Confidence:</strong> {{ "%.1f"|format(review.score) if review.score else 'N/A' }}%
           </p>

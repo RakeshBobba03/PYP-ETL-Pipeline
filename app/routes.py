@@ -15,7 +15,7 @@ from flask import (
 from urllib.parse import quote
 from werkzeug.utils import secure_filename
 from app import db
-from app.models import NewItem, MatchReview, MemberSubmission, Member
+from app.models import NewItem, MatchReview, MemberSubmission, Member, Product, Ingredient
 from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample, get_member_offerings_from_cache
 
 main_bp = Blueprint('main', __name__)
@@ -65,6 +65,85 @@ def dgraph_request_with_retry(url, json_data, headers, max_retries=3, base_delay
             time.sleep(delay)
     
     raise Exception(f"All {max_retries} retry attempts failed")
+
+def is_semantically_valid_match(original_name, suggested_name, item_type):
+    """
+    Perform additional semantic validation to prevent incorrect matches.
+    Returns True if the match is semantically valid, False otherwise.
+    """
+    if not original_name or not suggested_name:
+        return False
+    
+    original_lower = original_name.lower().strip()
+    suggested_lower = suggested_name.lower().strip()
+    
+    # Define category-specific keywords that should not be mixed
+    category_keywords = {
+        'vitamins': ['vitamin', 'vitamins', 'vit', 'ascorbic', 'thiamine', 'riboflavin', 'niacin', 'b12', 'b6', 'folate', 'biotin', 'pantothenic'],
+        'amino_acids': ['amino', 'acid', 'protein', 'peptide', 'glutamine', 'arginine', 'lysine', 'methionine', 'tryptophan', 'tyrosine'],
+        'minerals': ['calcium', 'iron', 'zinc', 'magnesium', 'selenium', 'copper', 'manganese', 'chromium', 'iodine', 'phosphorus'],
+        'omega': ['omega', 'dha', 'epa', 'fatty', 'acid', 'fish', 'oil', 'flax', 'linseed'],
+        'probiotics': ['probiotic', 'probiotics', 'lactobacillus', 'bifidobacterium', 'acidophilus', 'bacteria', 'culture'],
+        'prebiotics': ['prebiotic', 'prebiotics', 'fiber', 'inulin', 'fructooligosaccharide', 'galactooligosaccharide'],
+        'certifications': ['organic', 'certified', 'usda', 'canada', 'european', 'bio', 'eco', 'sustainable', 'fair trade'],
+        'additives': ['additive', 'additives', 'preservative', 'stabilizer', 'emulsifier', 'thickener', 'colorant'],
+        'adhesives': ['adhesive', 'adhesives', 'glue', 'bonding', 'sealant', 'cement', 'paste']
+    }
+    
+    # Check for category mismatches
+    for category, keywords in category_keywords.items():
+        original_has_category = any(keyword in original_lower for keyword in keywords)
+        suggested_has_category = any(keyword in suggested_lower for keyword in keywords)
+        
+        # If one has the category and the other doesn't, it's likely a mismatch
+        if original_has_category != suggested_has_category:
+            # Special case: allow some flexibility for similar categories
+            if category == 'omega' and ('omega' in original_lower or 'omega' in suggested_lower):
+                # Allow omega-3 to match omega-6, but not other categories
+                continue
+            elif category == 'probiotics' and category == 'prebiotics':
+                # These are related but different - be more strict
+                continue
+            else:
+                current_app.logger.info(f"[semantic_validation] Category mismatch: '{original_name}' ({category}) vs '{suggested_name}'")
+                return False
+    
+    # Check for specific problematic patterns
+    problematic_patterns = [
+        # Vitamin vs Amino Acid mismatches
+        ('vitamin', 'amino'),
+        ('vitamin', 'protein'),
+        ('vitamin', 'peptide'),
+        # Additive vs Adhesive mismatches  
+        ('additive', 'adhesive'),
+        ('additive', 'glue'),
+        ('additive', 'bonding'),
+        # Probiotic vs Prebiotic mismatches
+        ('probiotic', 'prebiotic'),
+        ('bacteria', 'fiber'),
+        ('culture', 'inulin'),
+        # Mineral vs Vitamin mismatches
+        ('calcium', 'vitamin'),
+        ('iron', 'vitamin'),
+        ('zinc', 'vitamin'),
+    ]
+    
+    for pattern1, pattern2 in problematic_patterns:
+        if pattern1 in original_lower and pattern2 in suggested_lower:
+            current_app.logger.info(f"[semantic_validation] Problematic pattern: '{original_name}' ({pattern1}) vs '{suggested_name}' ({pattern2})")
+            return False
+        if pattern2 in original_lower and pattern1 in suggested_lower:
+            current_app.logger.info(f"[semantic_validation] Problematic pattern: '{original_name}' ({pattern2}) vs '{suggested_name}' ({pattern1})")
+            return False
+    
+    # Check for length difference (too different lengths might indicate different items)
+    length_ratio = min(len(original_lower), len(suggested_lower)) / max(len(original_lower), len(suggested_lower))
+    if length_ratio < 0.5:  # If one is less than half the length of the other
+        current_app.logger.info(f"[semantic_validation] Length mismatch: '{original_name}' ({len(original_lower)}) vs '{suggested_name}' ({len(suggested_lower)})")
+        return False
+    
+    # If we get here, the match passes semantic validation
+    return True
 
 @main_bp.route('/')
 def index():
@@ -385,6 +464,102 @@ def review_list():
         NewItem.ignored == False    # Exclude ignored items
     ).all()
     
+    # Fetch all canonical data in bulk for caching
+    canonical_titles = {'product': {}, 'ingredient': {}, 'certification': {}}
+    
+    try:
+        url = current_app.config.get('DGRAPH_URL')
+        token = current_app.config.get('DGRAPH_API_TOKEN')
+        
+        if url and token:
+            headers = {"Content-Type": "application/json", "Dg-Auth": token}
+            
+            # Fetch all products
+            product_query = """
+            query {
+                queryProduct {
+                    productID
+                    title
+                }
+            }
+            """
+            product_response = requests.post(url, json={"query": product_query}, headers=headers, timeout=10)
+            if product_response.status_code == 200:
+                product_data = product_response.json()
+                if product_data and 'data' in product_data:
+                    for product in product_data['data'].get('queryProduct', []):
+                        canonical_titles['product'][product['productID']] = product['title']
+                    current_app.logger.info(f"[review_list] Fetched {len(canonical_titles['product'])} products from Dgraph")
+            
+            # Fetch all ingredients
+            ingredient_query = """
+            query {
+                queryIngredients {
+                    ingredientID
+                    title
+                }
+            }
+            """
+            ingredient_response = requests.post(url, json={"query": ingredient_query}, headers=headers, timeout=10)
+            if ingredient_response.status_code == 200:
+                ingredient_data = ingredient_response.json()
+                if ingredient_data and 'data' in ingredient_data:
+                    for ingredient in ingredient_data['data'].get('queryIngredients', []):
+                        canonical_titles['ingredient'][ingredient['ingredientID']] = ingredient['title']
+                    current_app.logger.info(f"[review_list] Fetched {len(canonical_titles['ingredient'])} ingredients from Dgraph")
+            
+            # Fetch all certifications
+            certification_query = """
+            query {
+                queryCertification {
+                    certID
+                    title
+                }
+            }
+            """
+            certification_response = requests.post(url, json={"query": certification_query}, headers=headers, timeout=10)
+            if certification_response.status_code == 200:
+                certification_data = certification_response.json()
+                if certification_data and 'data' in certification_data:
+                    for certification in certification_data['data'].get('queryCertification', []):
+                        canonical_titles['certification'][certification['certID']] = certification['title']
+                    current_app.logger.info(f"[review_list] Fetched {len(canonical_titles['certification'])} certifications from Dgraph")
+            
+            current_app.logger.info(f"[review_list] Total canonical data: {len(canonical_titles['product'])} products, {len(canonical_titles['ingredient'])} ingredients, {len(canonical_titles['certification'])} certifications")
+            
+        else:
+            current_app.logger.warning(f"[review_list] Dgraph not configured - URL: {url}, Token: {'present' if token else 'missing'}")
+            
+    except Exception as e:
+        current_app.logger.error(f"[review_list] Error fetching canonical data: {e}")
+        canonical_titles = {'product': {}, 'ingredient': {}, 'certification': {}}
+    
+    # For each matched item, get the canonical item name from cache
+    for item in matched_items:
+        if item.matched_canonical_id and not hasattr(item, 'canonical_name'):
+            canonical_name = "Unknown"
+            
+            # Try to get canonical name from cache
+            if item.type == 'product' and item.matched_canonical_id in canonical_titles['product']:
+                canonical_name = canonical_titles['product'][item.matched_canonical_id]
+                current_app.logger.info(f"[review_list] Found product name for {item.matched_canonical_id}: {canonical_name}")
+            elif item.type == 'ingredient' and item.matched_canonical_id in canonical_titles['ingredient']:
+                canonical_name = canonical_titles['ingredient'][item.matched_canonical_id]
+                current_app.logger.info(f"[review_list] Found ingredient name for {item.matched_canonical_id}: {canonical_name}")
+            elif item.type == 'certification' and item.matched_canonical_id in canonical_titles['certification']:
+                canonical_name = canonical_titles['certification'][item.matched_canonical_id]
+                current_app.logger.info(f"[review_list] Found certification name for {item.matched_canonical_id}: {canonical_name}")
+            else:
+                # Fallback to suggested name if available
+                if hasattr(item, 'review') and item.review and item.review.suggested_name:
+                    canonical_name = item.review.suggested_name
+                    current_app.logger.info(f"[review_list] Using suggested_name as fallback for {item.matched_canonical_id}: {canonical_name}")
+                else:
+                    current_app.logger.warning(f"[review_list] No canonical name found for {item.type} {item.matched_canonical_id}")
+            
+            # Store the canonical name as a dynamic attribute
+            item.canonical_name = canonical_name
+    
     # Get all companies that were created during ETL processing
     # This includes companies with auto-resolved items (no manual review needed)
     all_etl_companies = Member.query.distinct().all()
@@ -542,25 +717,39 @@ def batch_save_decisions():
 
 @main_bp.route('/reviews/batch_approve_high_confidence', methods=['POST'])
 def batch_approve_high_confidence():
-    """Auto-approve items with high confidence matches (80% to 95%)"""
+    """Auto-approve items with high confidence matches (90% to 95%) with additional semantic validation"""
     from app.etl import get_fuzzy_match_threshold, get_auto_resolve_threshold
     
-    fuzzy_threshold = get_fuzzy_match_threshold()  # 80%
+    # Use stricter thresholds for high confidence approval
+    strict_fuzzy_threshold = 90.0  # Increased from 80% to 90%
     auto_resolve_threshold = get_auto_resolve_threshold()  # 95%
     
-    high_confidence_reviews = MatchReview.query.join(NewItem) \
+    # Get all potential high confidence reviews
+    potential_reviews = MatchReview.query.join(NewItem) \
         .filter(
             MatchReview.approved.is_(None), 
             NewItem.ignored.is_(False),
-            MatchReview.score >= fuzzy_threshold,
+            MatchReview.score >= strict_fuzzy_threshold,
             MatchReview.score < auto_resolve_threshold,  # Less than 95% (not auto-resolved)
             MatchReview.suggested_ext_id.isnot(None)
         ).all()
     
-    current_app.logger.info(f"[batch_approve_high_confidence] Auto-approving {len(high_confidence_reviews)} high confidence items")
+    current_app.logger.info(f"[batch_approve_high_confidence] Found {len(potential_reviews)} potential high confidence items")
     
+    # Apply additional semantic validation
+    approved_reviews = []
+    rejected_reviews = []
+    
+    for review in potential_reviews:
+        if is_semantically_valid_match(review.new_item.name, review.suggested_name, review.new_item.type):
+            approved_reviews.append(review)
+        else:
+            rejected_reviews.append(review)
+            current_app.logger.warning(f"[batch_approve_high_confidence] Rejected semantic mismatch: '{review.new_item.name}' -> '{review.suggested_name}' (score: {review.score:.1f}%)")
+    
+    # Auto-approve only the semantically valid matches
     approved_count = 0
-    for review in high_confidence_reviews:
+    for review in approved_reviews:
         review.approved = True
         review.new_item.resolved = True
         review.new_item.matched_canonical_id = review.suggested_ext_id
@@ -569,8 +758,8 @@ def batch_approve_high_confidence():
         approved_count += 1
 
     db.session.commit()
-    current_app.logger.info(f"[batch_approve_high_confidence] Auto-approved {approved_count} high confidence items.")
-    message = f'Auto-approved {approved_count} high confidence items ({fuzzy_threshold}% to {auto_resolve_threshold}% match).'
+    current_app.logger.info(f"[batch_approve_high_confidence] Auto-approved {approved_count} high confidence items (rejected {len(rejected_reviews)} semantic mismatches).")
+    message = f'Auto-approved {approved_count} high confidence items ({strict_fuzzy_threshold}% to {auto_resolve_threshold}% match with semantic validation). {len(rejected_reviews)} items rejected due to semantic mismatches.'
     return redirect(url_for('main.review_list', status='success', message=quote(message)))
 
 @main_bp.route('/reviews/batch_ignore_all', methods=['POST'])
@@ -1256,3 +1445,68 @@ def cancel_review():
     session.pop('etl_validation_errors', None)
     session.pop('etl_error_filename', None)
     return redirect(url_for('main.upload_file', status='info', message='Review cancelled. You can upload a new file now.'))
+
+@main_bp.route('/export_results_csv')
+def export_results_csv():
+    """Export push results as CSV file"""
+    submission = MemberSubmission.query.order_by(MemberSubmission.id.desc()).first()
+    if not submission:
+        current_app.logger.warning("[export_results_csv] No submission found to export.")
+        return redirect(url_for('main.upload_file', status='warning', message='No submission found to export.'))
+    
+    try:
+        # Get all data for the submission
+        members = Member.query.filter_by(submission_id=submission.id).all()
+        
+        # Create CSV content
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            'Submission Name', 'Business Name', 'Item Type', 'Item Name', 
+            'Decision', 'Matched Canonical ID', 'Score', 'Created At'
+        ])
+        
+        # Write data rows
+        for member in members:
+            for item in member.new_items:
+                # Determine decision type
+                if item.ignored:
+                    decision = 'Ignored'
+                elif item.resolved and item.matched_canonical_id:
+                    decision = 'Matched to Existing'
+                elif not item.resolved:
+                    decision = 'Created as New'
+                else:
+                    decision = 'Unknown'
+                
+                writer.writerow([
+                    submission.name,
+                    member.name,
+                    item.type.title(),
+                    item.name,
+                    decision,
+                    item.matched_canonical_id or '',
+                    f"{item.score:.2f}" if item.score else '',
+                    item.member.submission.created_at.strftime('%Y-%m-%d %H:%M:%S') if item.member.submission.created_at else ''
+                ])
+        
+        # Prepare response
+        output.seek(0)
+        csv_content = output.getvalue()
+        output.close()
+        
+        # Create response
+        from flask import make_response
+        response = make_response(csv_content)
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename="{submission.name}_results.csv"'
+        
+        current_app.logger.info(f"[export_results_csv] Exported {len(members)} members with their items to CSV")
+        return response
+        
+    except Exception as e:
+        current_app.logger.error(f"[export_results_csv] Error exporting CSV: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error exporting CSV: {str(e)}'))

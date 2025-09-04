@@ -115,6 +115,8 @@
         function filterItems() {
             const searchInput = document.getElementById('search-input');
             const typeFilter = document.getElementById('type-filter');
+            const fileFilter = document.getElementById('file-filter');
+            const businessFilter = document.getElementById('business-filter');
             const confidenceFilter = document.getElementById('confidence-filter');
             const reviewItems = document.querySelectorAll('.review-item');
             const noResults = document.getElementById('no-results');
@@ -126,6 +128,8 @@
             
             const searchTerm = searchInput.value.toLowerCase();
             const selectedType = typeFilter.value;
+            const selectedFile = fileFilter ? fileFilter.value : '';
+            const selectedBusiness = businessFilter ? businessFilter.value : '';
             const selectedConfidence = confidenceFilter.value;
             
             let visibleCount = 0;
@@ -133,13 +137,17 @@
             reviewItems.forEach(item => {
                 const itemName = item.dataset.name || '';
                 const itemType = item.dataset.type || '';
+                const itemFile = item.dataset.file || '';
+                const itemBusiness = item.dataset.business || '';
                 const itemConfidence = item.dataset.confidence || '';
                 
                 const matchesSearch = !searchTerm || itemName.includes(searchTerm);
                 const matchesType = !selectedType || itemType === selectedType;
+                const matchesFile = !selectedFile || itemFile === selectedFile;
+                const matchesBusiness = !selectedBusiness || itemBusiness === selectedBusiness;
                 const matchesConfidence = !selectedConfidence || itemConfidence === selectedConfidence;
                 
-                if (matchesSearch && matchesType && matchesConfidence) {
+                if (matchesSearch && matchesType && matchesFile && matchesBusiness && matchesConfidence) {
                     item.style.display = 'block';
                     visibleCount++;
                 } else {
@@ -172,6 +180,8 @@
             // Set up filter event listeners
             const searchInput = document.getElementById('search-input');
             const typeFilter = document.getElementById('type-filter');
+            const fileFilter = document.getElementById('file-filter');
+            const businessFilter = document.getElementById('business-filter');
             const confidenceFilter = document.getElementById('confidence-filter');
             
             if (searchInput) {
@@ -181,6 +191,14 @@
             if (typeFilter) {
                 typeFilter.addEventListener('change', filterItems);
                 console.log('Added change listener to type filter');
+            }
+            if (fileFilter) {
+                fileFilter.addEventListener('change', filterItems);
+                console.log('Added change listener to file filter');
+            }
+            if (businessFilter) {
+                businessFilter.addEventListener('change', filterItems);
+                console.log('Added change listener to business filter');
             }
             if (confidenceFilter) {
                 confidenceFilter.addEventListener('change', filterItems);

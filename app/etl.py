@@ -13,9 +13,9 @@ from app import db
 from app.models import MemberSubmission, Member, NewItem, MatchReview
 
 BATCH_SIZE = 1000
-# Configurable thresholds
-FUZZY_MATCH_THRESHOLD = float(os.getenv('FUZZY_MATCH_THRESHOLD', '80.0'))
-AUTO_RESOLVE_THRESHOLD = float(os.getenv('AUTO_RESOLVE_THRESHOLD', '95.0'))  # Higher threshold for auto-resolution
+# Configurable thresholds - Made more strict to prevent incorrect matches
+FUZZY_MATCH_THRESHOLD = float(os.getenv('FUZZY_MATCH_THRESHOLD', '85.0'))  # Increased from 80% to 85%
+AUTO_RESOLVE_THRESHOLD = float(os.getenv('AUTO_RESOLVE_THRESHOLD', '97.0'))  # Increased from 95% to 97%
 AUTO_REJECT_THRESHOLD = float(os.getenv('AUTO_REJECT_THRESHOLD', '50.0'))  # Auto-reject if score below this threshold
 
 # Enhanced scoring penalty configuration
