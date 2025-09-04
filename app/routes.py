@@ -16,7 +16,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 from app import db
 from app.models import NewItem, MatchReview, MemberSubmission, Member
-from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample
+from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample, get_member_offerings_from_cache
 
 main_bp = Blueprint('main', __name__)
 
@@ -167,9 +167,10 @@ def validate_headers():
             validation = validate_required_columns(headers, mapping)
             sample_data = normalize_data_sample(file_path, headers, mapping, sample_size=10)
         
-        # Get schema fields for template
-        from app.etl import get_schema_field_mapping
+        # Get schema fields and offerings mapping for template
+        from app.etl import get_schema_field_mapping, get_member_offerings_mapping
         schema_fields = get_schema_field_mapping()
+        offerings_mapping = get_member_offerings_mapping()
         
         return render_template(
             'validate_headers.html',
@@ -179,7 +180,8 @@ def validate_headers():
             unmapped=unmapped,
             validation=validation,
             sample_data=sample_data,
-            schema_fields=schema_fields
+            schema_fields=schema_fields,
+            offerings_mapping=offerings_mapping
         )
         
     except Exception as e:
@@ -1023,7 +1025,15 @@ def push_to_dgraph():
                 all_product_ids.extend(new_product_ids)
                 all_ingredient_ids.extend(new_ingredient_ids)
                 
-                if all_product_ids or all_ingredient_ids:
+                # Add member offerings for existing members
+                member_offerings = get_member_offerings_from_cache(m.id)
+                offering_refs = []
+                if member_offerings:
+                    for offering in member_offerings:
+                        offering_refs.append({"offeringID": offering['uid']})
+                    current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for existing member '{biz}': {[o['title'] for o in member_offerings]}")
+                
+                if all_product_ids or all_ingredient_ids or offering_refs:
                     mut = """
                     mutation ($in: UpdateMemberInput!) {
                       updateMember(input: $in) {
@@ -1033,15 +1043,24 @@ def push_to_dgraph():
                     """
                     all_ps = [{"productID": pid} for pid in all_product_ids]
                     all_is = [{"ingredientID": iid} for iid in all_ingredient_ids]
+                    
+                    update_data = {}
+                    if all_ps:
+                        update_data["products"] = all_ps
+                    if all_is:
+                        update_data["ingredients"] = all_is
+                    if offering_refs:
+                        update_data["memberOfferings"] = offering_refs
+                    
                     v = {
                       "in": {
                         "filter": {"memberID": [mem_id]},
-                        "set":    {"products": all_ps, "ingredients": all_is}
+                        "set": update_data
                       }
                     }
                     requests.post(url, json={"query": mut, "variables": v}, headers=headers)
                     results["members"].append({"memberID": mem_id, "businessName": biz})
-                    current_app.logger.info(f"[push] Updated member '{biz}' with {len(all_product_ids)} products and {len(all_ingredient_ids)} ingredients")
+                    current_app.logger.info(f"[push] Updated member '{biz}' with {len(all_product_ids)} products, {len(all_ingredient_ids)} ingredients, and {len(offering_refs)} offerings")
 
                 continue  # done with this existing member
 
@@ -1223,6 +1242,15 @@ def push_to_dgraph():
                 member_input["stateOrProvince1"] = state_ref
             if hasattr(m, 'zip_code1') and m.zip_code1:
                 member_input["zipCode1"] = m.zip_code1
+            
+            # Add member offerings
+            member_offerings = get_member_offerings_from_cache(m.id)
+            if member_offerings:
+                offering_refs = []
+                for offering in member_offerings:
+                    offering_refs.append({"offeringID": offering['uid']})
+                member_input["memberOfferings"] = offering_refs
+                current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for '{biz}': {[o['title'] for o in member_offerings]}")
 
             mut = """
             mutation ($in: [AddMemberInput!]!) {

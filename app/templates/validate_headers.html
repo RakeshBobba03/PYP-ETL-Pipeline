@@ -17,10 +17,54 @@
           {% endif %}
         </span>
       </div>
+      
+      {% if validation.missing_important %}
+      <div class="validation-item warning">
+        <i class="mdi mdi-alert"></i>
+        <span>
+          Missing important columns: {{ validation.missing_important|join(', ') }}
+        </span>
+      </div>
+      {% endif %}
+      
       <div class="validation-stats">
         <span>Headers: {{ validation.total_headers }}</span>
         <span>Mapped: {{ validation.mapped_headers }}</span>
         <span>Unmapped: {{ validation.total_headers - validation.mapped_headers }}</span>
+      </div>
+      
+      <div class="field-categories">
+        <div class="category required">
+          <h5><i class="mdi mdi-star"></i> Required Fields ({{ validation.required_fields|length }})</h5>
+          <div class="field-list">
+            {% for field in validation.required_fields %}
+              <span class="field-item {% if field in validation.mapped_fields %}mapped{% else %}missing{% endif %}">
+                {{ field }}
+                {% if field in validation.mapped_fields %}
+                  <i class="mdi mdi-check"></i>
+                {% else %}
+                  <i class="mdi mdi-close"></i>
+                {% endif %}
+              </span>
+            {% endfor %}
+          </div>
+        </div>
+        
+        <div class="category important">
+          <h5><i class="mdi mdi-star-outline"></i> Important Fields ({{ validation.important_fields|length }})</h5>
+          <div class="field-list">
+            {% for field in validation.important_fields %}
+              <span class="field-item {% if field in validation.mapped_fields %}mapped{% else %}missing{% endif %}">
+                {{ field }}
+                {% if field in validation.mapped_fields %}
+                  <i class="mdi mdi-check"></i>
+                {% else %}
+                  <i class="mdi mdi-close"></i>
+                {% endif %}
+              </span>
+            {% endfor %}
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -88,6 +132,60 @@
     </div>
   </div>
 
+  <!-- Member Offerings Section -->
+  <div class="offerings-section">
+    <h4><i class="mdi mdi-package-variant"></i> Member Offerings Detection</h4>
+    <p>Based on your data mapping, the system will automatically detect and assign member offerings based on the presence of specific fields.</p>
+    
+    <div class="offerings-info">
+      <div class="offerings-table">
+        <div class="offerings-header">
+          <div class="col">Source Field</div>
+          <div class="col">Offering Title</div>
+          <div class="col">Offering UID</div>
+          <div class="col">Source</div>
+          <div class="col">Status</div>
+        </div>
+        
+        {% set offerings_mapping = offerings_mapping %}
+        
+                 {% for field_name, offering_info in offerings_mapping.items() %}
+         <div class="offerings-row">
+           <div class="col field-name">{{ field_name }}</div>
+           <div class="col offering-title">{{ offering_info.title }}</div>
+           <div class="col offering-uid">{{ offering_info.uid }}</div>
+           <div class="col source">
+             <span class="source-badge {{ offering_info.source }}">
+               <i class="mdi mdi-{{ 'database' if offering_info.source == 'dgraph' else 'alert' }}"></i>
+               {{ offering_info.source|title }}
+             </span>
+           </div>
+           <div class="col status">
+             {% if field_name in validation.mapped_fields %}
+               <span class="status available">
+                 <i class="mdi mdi-check"></i> Available
+               </span>
+             {% else %}
+               <span class="status unavailable">
+                 <i class="mdi mdi-close"></i> Not Mapped
+               </span>
+             {% endif %}
+           </div>
+         </div>
+         {% endfor %}
+      </div>
+    </div>
+    
+         <div class="offerings-note">
+       <i class="mdi mdi-information"></i>
+       <span>
+         <strong>Note:</strong> Member offerings will be automatically assigned based on the presence of data in the mapped fields. 
+         UIDs are dynamically fetched from Dgraph (green badges) or use fallback production UIDs (yellow badges) if Dgraph is unavailable.
+         If no offerings are detected, "No Offerings" will be assigned.
+       </span>
+     </div>
+  </div>
+
   <!-- Data Preview Section -->
   <div class="preview-section">
     <h4><i class="mdi mdi-eye"></i> Data Preview (First 10 Rows)</h4>
@@ -95,26 +193,30 @@
     
     <div class="data-preview">
       {% if sample_data %}
-        <div class="preview-table">
-          <div class="preview-header">
-            {% for field in sample_data[0].keys() %}
-              <div class="preview-col">{{ field }}</div>
-            {% endfor %}
-          </div>
-          {% for row in sample_data %}
-            <div class="preview-row">
-              {% for field, value in row.items() %}
-                <div class="preview-col">
-                  {% if value %}
-                    <span class="value">{{ value }}</span>
-                  {% else %}
-                    <span class="empty">(empty)</span>
-                  {% endif %}
-                </div>
+        <table class="preview-table">
+          <thead class="preview-header">
+            <tr>
+              {% for field in sample_data[0].keys() %}
+                <th class="preview-col">{{ field }}</th>
               {% endfor %}
-            </div>
-          {% endfor %}
-        </div>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in sample_data %}
+              <tr class="preview-row">
+                {% for field, value in row.items() %}
+                  <td class="preview-col">
+                    {% if value %}
+                      <span class="value">{{ value }}</span>
+                    {% else %}
+                      <span class="empty">(empty)</span>
+                    {% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       {% else %}
         <div class="no-preview">
           <i class="mdi mdi-information"></i>
@@ -252,20 +354,24 @@ function updateDataPreview(sampleData) {
     const fields = Object.keys(sampleData[0]);
     
     const previewHTML = `
-      <div class="preview-table">
-        <div class="preview-header">
-          ${fields.map(field => `<div class="preview-col">${field}</div>`).join('')}
-        </div>
-        ${sampleData.map(row => `
-          <div class="preview-row">
-            ${fields.map(field => `
-              <div class="preview-col">
-                ${row[field] ? `<span class="value">${row[field]}</span>` : '<span class="empty">(empty)</span>'}
-              </div>
-            `).join('')}
-          </div>
-        `).join('')}
-      </div>
+      <table class="preview-table">
+        <thead class="preview-header">
+          <tr>
+            ${fields.map(field => `<th class="preview-col">${field}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${sampleData.map(row => `
+            <tr class="preview-row">
+              ${fields.map(field => `
+                <td class="preview-col">
+                  ${row[field] ? `<span class="value">${row[field]}</span>` : '<span class="empty">(empty)</span>'}
+                </td>
+              `).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
     `;
     
     dataPreview.innerHTML = previewHTML;
@@ -378,6 +484,182 @@ function processFile() {
 
 .validation-item.error {
   color: var(--danger);
+}
+
+.validation-item.warning {
+  background: rgba(255, 193, 7, 0.1);
+  border-color: #ffc107;
+  color: #ffc107;
+}
+
+.field-categories {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.category {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.category h5 {
+  margin: 0 0 0.75rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.category.required h5 {
+  color: var(--danger);
+}
+
+.category.important h5 {
+  color: #ffc107;
+}
+
+.field-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.field-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.field-item.mapped {
+  background: rgba(76, 175, 80, 0.1);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.field-item.missing {
+  background: rgba(244, 67, 54, 0.1);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.field-item i {
+  font-size: 0.7rem;
+}
+
+.offerings-section {
+  margin: 2rem 0;
+}
+
+.offerings-info {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.offerings-table {
+  width: 100%;
+}
+
+.offerings-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+  background: var(--accent);
+  color: white;
+  font-weight: 500;
+  padding: 0.75rem;
+}
+
+.offerings-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem;
+  align-items: center;
+}
+
+.offerings-row:last-child {
+  border-bottom: none;
+}
+
+.offerings-row:nth-child(even) {
+  background: var(--bg);
+}
+
+.offerings-row .col {
+  padding: 0.25rem;
+}
+
+.field-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.offering-title {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.offering-uid {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.source-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.source-badge.dgraph {
+  background: rgba(76, 175, 80, 0.1);
+  color: var(--success);
+}
+
+.source-badge.fallback {
+  background: rgba(255, 193, 7, 0.1);
+  color: #ffc107;
+}
+
+.status.available {
+  color: var(--success);
+}
+
+.status.unavailable {
+  color: var(--muted);
+}
+
+.offerings-note {
+  background: rgba(139, 179, 57, 0.1);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.offerings-note i {
+  color: var(--accent);
+  margin-top: 0.1rem;
 }
 
 .validation-stats {
@@ -557,40 +839,63 @@ function processFile() {
 .data-preview {
   border: 1px solid var(--border);
   border-radius: 6px;
-  overflow: hidden;
-  max-height: 400px;
-  overflow-y: auto;
+  overflow: auto;
+  max-height: 500px;
 }
 
 .preview-table {
   width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .preview-header {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   background: var(--accent);
   color: white;
   font-weight: 500;
-  padding: 0.75rem;
   position: sticky;
   top: 0;
+  z-index: 10;
+}
+
+.preview-header .preview-col {
+  padding: 0.75rem 0.5rem;
+  text-align: left;
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 150px;
+  min-width: 150px;
+  max-width: 200px;
+}
+
+.preview-header .preview-col:last-child {
+  border-right: none;
 }
 
 .preview-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   border-bottom: 1px solid var(--border);
-  padding: 0.75rem;
 }
 
 .preview-row:nth-child(even) {
   background: var(--bg);
 }
 
-.preview-col {
-  padding: 0.25rem;
+.preview-row .preview-col {
+  padding: 0.5rem;
+  border-right: 1px solid var(--border);
   word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 150px;
+  min-width: 150px;
+  max-width: 200px;
+  vertical-align: top;
+}
+
+.preview-row .preview-col:last-child {
+  border-right: none;
 }
 
 .value {

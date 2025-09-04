@@ -27,19 +27,283 @@ ALGORITHM_DISAGREEMENT_THRESHOLD = float(os.getenv('ALGORITHM_DISAGREEMENT_THRES
 
 # Schema field mappings for header validation
 MEMBER_SCHEMA_FIELDS = {
-    'companyBio': ['companybio', 'company_bio', 'bio', 'business_bio', 'description', 'about', 'company description', 'business description', 'company bio'],
-    'businessName': ['businessname', 'business_name', 'company_name', 'company', 'name', 'business'],
-    'country1': ['country1', 'country', 'country_1', 'nation', 'location'],
-    'contactEmail': ['contactemail', 'contact_email', 'email', 'e-mail', 'mail', 'contact'],
-    'streetAddress1': ['streetaddress1', 'street_address1', 'address', 'street', 'address1', 'street1'],
+    # Core member identification
+    'memberID': ['memberid', 'member_id', 'uid', 'id', 'member uid'],
+    'businessName': ['businessname', 'business_name', 'company_name', 'company', 'name', 'business', 'organization'],
+    'contactFullName': ['contactfullname', 'contact_full_name', 'full_name', 'contact_name', 'name'],
+    'firstName': ['firstname', 'first_name', 'fname', 'given_name'],
+    'lastName': ['lastname', 'last_name', 'lname', 'family_name', 'surname'],
+    'contactRole': ['contactrole', 'contact_role', 'role', 'position', 'title', 'job_title'],
+    'contactEmail': ['contactemail', 'contact_email', 'email', 'e-mail', 'mail', 'contact', 'primary_email'],
+    'phone': ['phone', 'telephone', 'phone_number', 'contact_phone', 'mobile', 'cell'],
+    'profileImage': ['profileimage', 'profile_image', 'image', 'photo', 'avatar', 'logo'],
+    
+    # Address fields
+    'streetAddress1': ['streetaddress1', 'street_address1', 'address', 'street', 'address1', 'street1', 'street_address'],
     'city1': ['city1', 'city', 'city_1', 'town', 'municipality'],
+    'stateOrProvince1': ['stateorprovince1', 'state_or_province1', 'state', 'province', 'region', 'state1'],
+    'zipCode1': ['zipcode1', 'zip_code1', 'zip', 'postal_code', 'zipcode', 'postal'],
+    'country1': ['country1', 'country', 'country_1', 'nation', 'location'],
+    'multipleLocations': ['multiplelocations', 'multiple_locations', 'has_multiple_locations', 'multi_location'],
+    
+    # System fields
+    'createdAt': ['createdat', 'created_at', 'date_created', 'created_date', 'timestamp'],
+    'networkStatus': ['networkstatus', 'network_status', 'status', 'network'],
+    'dataSource': ['datasource', 'data_source', 'source', 'import_source'],
+    'sourceFile': ['sourcefile', 'source_file', 'file_name', 'filename', 'import_file'],
+    'membershipStatus': ['membershipstatus', 'membership_status', 'member_status', 'status'],
+    'subscriptionStatus': ['subscriptionstatus', 'subscription_status', 'subscription'],
+    'isTrial': ['istrial', 'is_trial', 'trial', 'trial_member', 'trial_status'],
+    
+    # Offerings and services
+    'memberOfferings': ['memberofferings', 'member_offerings', 'offerings', 'services_offered'],
+    'designServices': ['designservices', 'design_services', 'design'],
+    'suppliedEquipment': ['suppliedequipment', 'supplied_equipment', 'equipment_supplied'],
+    'facilityEquipment': ['facilityequipment', 'facility_equipment', 'equipment_facility'],
+    'ingredients': ['ingredients', 'ingredient', 'ingredient_list', 'components', 'materials'],
+    'laboratoryServices': ['laboratoryservices', 'laboratory_services', 'lab_services', 'labservices'],
+    'legalServices': ['legalservices', 'legal_services', 'legal'],
+    'logisticalServices': ['logisticalservices', 'logistical_services', 'logistics', 'logistics_services'],
+    'marketingServices': ['marketingservices', 'marketing_services', 'marketing'],
+    'deliveredIn': ['deliveredin', 'delivered_in', 'delivery_packaging', 'packaging_delivered'],
+    'suppliedPackaging': ['suppliedpackaging', 'supplied_packaging', 'packaging_supplied'],
+    'regulatoryServices': ['regulatoryservices', 'regulatory_services', 'regulatory'],
+    'manufacturingServices': ['manufacturingservices', 'manufacturing_services', 'manufacturing'],
+    'startupFriendlyServices': ['startupfriendlyservices', 'startup_friendly_services', 'startup_services', 'startupservices'],
+    'facilityDetails': ['facilitydetails', 'facility_details', 'facility'],
+    'facilityAmenities': ['facilityamenities', 'facility_amenities', 'amenities'],
+    'typeOfSpace': ['typeofspace', 'type_of_space', 'space_type', 'spaces'],
+    'typeOfAgreement': ['typeofagreement', 'type_of_agreement', 'agreement_type', 'agreements'],
+    'consultingServices': ['consultingservices', 'consulting_services', 'consulting'],
+    
+    # Social media and web presence
+    'website': ['website', 'web', 'site', 'url', 'web_site'],
+    'facebookURL': ['facebookurl', 'facebook_url', 'facebook', 'fb_url'],
+    'instagramURL': ['instagramurl', 'instagram_url', 'instagram', 'ig_url'],
+    'linkedinURL': ['linkedinurl', 'linkedin_url', 'linkedin', 'li_url'],
+    'twitterURL': ['twitterurl', 'twitter_url', 'twitter', 'tw_url'],
+    'youtubeURL': ['youtubeurl', 'youtube_url', 'youtube', 'yt_url'],
+    
+    # Business information
+    'companyBio': ['companybio', 'company_bio', 'bio', 'business_bio', 'description', 'about', 'company description', 'business description', 'company bio'],
+    'businessDetails': ['businessdetails', 'business_details', 'business_info', 'company_details'],
+    'idealClient': ['idealclient', 'ideal_client', 'target_client', 'client_profile'],
+    'moq': ['moq', 'minimum_order_quantity', 'min_order', 'minimum_order'],
+    'readyToStartNow': ['readytostartnow', 'ready_to_start_now', 'available_now', 'ready_now'],
+    'bookingProjectsForMonth': ['bookingprojectsformonth', 'booking_projects_for_month', 'projects_month'],
+    'bookingProjectsForYear': ['bookingprojectsforyear', 'booking_projects_for_year', 'projects_year'],
+    'leadTimes': ['leadtimes', 'lead_times', 'lead_time', 'delivery_time'],
+    
+    # Products and materials
     'products': ['products', 'product', 'product_list', 'items', 'goods'],
-    'ingredients': ['ingredients', 'ingredient', 'ingredient_list', 'components', 'materials']
+    'certifications': ['certifications', 'certification', 'certs', 'cert_list'],
+    'allergens': ['allergens', 'allergen', 'allergen_list', 'allergies'],
+    'byProducts': ['byproducts', 'by_products', 'byproduct', 'by_product'],
+    'upCycledIngredients': ['upcycledingredients', 'up_cycled_ingredients', 'upcycled', 'recycled_ingredients'],
+    
+    # Sustainability and special fields
+    'sustainability': ['sustainability', 'sustainable', 'sustainability_info', 'eco_friendly'],
+    
+    # Additional fields that might be present
+    'firebaseUID': ['firebaseuid', 'firebase_uid', 'firebase_id', 'user_id'],
+    'updatedAt': ['updatedat', 'updated_at', 'last_updated', 'modified_date'],
 }
 
 def get_schema_field_mapping():
     """Get the schema field mapping for header validation"""
     return MEMBER_SCHEMA_FIELDS
+
+def fetch_member_offerings_from_dgraph():
+    """
+    Fetch member offerings from Dgraph to get the actual UIDs for the playground environment.
+    Returns a mapping of offering titles to their UIDs.
+    """
+    try:
+        url = current_app.config.get('DGRAPH_URL')
+        token = current_app.config.get('DGRAPH_API_TOKEN')
+    except RuntimeError:
+        # Not in Flask context
+        return {}
+    
+    if not url or not token:
+        try:
+            current_app.logger.warning("[member_offerings] Dgraph not configured - using fallback UIDs")
+        except RuntimeError:
+            pass  # Not in Flask context
+        return {}
+    
+    gql = """
+    query {
+      memberOfferings: queryMemberOffering {
+        title
+        offeringID
+      }
+    }
+    """
+    
+    try:
+        try:
+            current_app.logger.info("[member_offerings] Fetching member offerings from Dgraph...")
+        except RuntimeError:
+            pass  # Not in Flask context
+            
+        resp = requests.post(
+            url, 
+            json={"query": gql}, 
+            headers={"Content-Type": "application/json", "Dg-Auth": token}, 
+            timeout=10
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        offerings = data.get('memberOfferings', [])
+        
+        # Create mapping of title to UID
+        offerings_map = {offering['title']: offering['offeringID'] for offering in offerings}
+        
+        try:
+            current_app.logger.info(f"[member_offerings] Fetched {len(offerings)} offerings from Dgraph: {list(offerings_map.keys())}")
+        except RuntimeError:
+            pass  # Not in Flask context
+        
+        return offerings_map
+        
+    except Exception as e:
+        try:
+            current_app.logger.error(f"[member_offerings] Could not fetch offerings from Dgraph: {e}")
+        except RuntimeError:
+            pass  # Not in Flask context
+        return {}
+
+def get_member_offerings_mapping():
+    """
+    Get the mapping for member offerings based on the provided table.
+    Maps source fields to offering titles and UIDs.
+    Uses dynamic UIDs from Dgraph if available, otherwise falls back to production UIDs.
+    """
+    # Try to fetch from Dgraph first
+    dgraph_offerings = fetch_member_offerings_from_dgraph()
+    
+    # Define the mapping with offering titles
+    base_mapping = {
+        'designServices': {
+            'title': 'Design',
+            'fallback_uid': '0x19f191'
+        },
+        'suppliedEquipment': {
+            'title': 'Equipment',
+            'fallback_uid': '0x494de'
+        },
+        'facilityEquipment': {
+            'title': 'Equipment',
+            'fallback_uid': '0x494de'
+        },
+        'ingredients': {
+            'title': 'Ingredients',
+            'fallback_uid': '0x2626b4'
+        },
+        'laboratoryServices': {
+            'title': 'Laboratory',
+            'fallback_uid': '0x928dd'
+        },
+        'legalServices': {
+            'title': 'Legal',
+            'fallback_uid': '0x2192be'
+        },
+        'logisticalServices': {
+            'title': 'Logistics',
+            'fallback_uid': '0x200c34'
+        },
+        'marketingServices': {
+            'title': 'Marketing',
+            'fallback_uid': '0x30e3a'
+        },
+        'deliveredIn': {
+            'title': 'Packaging',
+            'fallback_uid': '0x928dc'
+        },
+        'suppliedPackaging': {
+            'title': 'Packaging',
+            'fallback_uid': '0x928dc'
+        },
+        'regulatoryServices': {
+            'title': 'Regulatory',
+            'fallback_uid': '0x7a21e'
+        },
+        'facilityDetails': {
+            'title': 'Spaces',
+            'fallback_uid': '0x19f18f'
+        },
+        'manufacturingServices': {
+            'title': 'Manufacturing',
+            'fallback_uid': '0x2c411f'
+        },
+        'startupFriendlyServices': {
+            'title': 'R&D',
+            'fallback_uid': '0x19f192'
+        },
+        'consultingServices': {
+            'title': 'Consulting',
+            'fallback_uid': '0x2aba6c'
+        }
+    }
+    
+    # Build the final mapping using Dgraph UIDs if available, otherwise fallback
+    final_mapping = {}
+    for field_name, offering_info in base_mapping.items():
+        title = offering_info['title']
+        uid = dgraph_offerings.get(title, offering_info['fallback_uid'])
+        
+        final_mapping[field_name] = {
+            'title': title,
+            'uid': uid,
+            'source': 'dgraph' if title in dgraph_offerings else 'fallback'
+        }
+    
+    return final_mapping
+
+def determine_member_offerings(member_data, mapping):
+    """
+    Determine member offerings based on the presence of specific fields in member data.
+    Uses the mapping table to assign offerings based on what services/fields the member has.
+    """
+    offerings = []
+    offerings_mapping = get_member_offerings_mapping()
+    
+    # Check each field that could indicate an offering
+    for field_name, offering_info in offerings_mapping.items():
+        # Check if this field is mapped in the CSV and has data
+        for csv_header, header_info in mapping.items():
+            if (isinstance(header_info, dict) and 
+                header_info.get('schema_field') == field_name and
+                member_data.get(csv_header)):
+                
+                # Check if the field has meaningful data
+                field_value = member_data.get(csv_header, '').strip()
+                if field_value and field_value.lower() not in ['', 'n/a', 'none', 'null', 'undefined']:
+                    offerings.append({
+                        'title': offering_info['title'],
+                        'uid': offering_info['uid'],
+                        'source_field': field_name,
+                        'source_value': field_value
+                    })
+                    break  # Found this offering, move to next
+    
+    # Special case: if no offerings detected, add "No Offerings"
+    if not offerings:
+        offerings.append({
+            'title': 'No Offerings',
+            'uid': '0x1e8595',
+            'source_field': 'none',
+            'source_value': 'No offerings detected'
+        })
+    
+    return offerings
+
+def get_member_offerings_from_cache(member_id):
+    """Get member offerings from the session cache"""
+    if hasattr(db.session, 'member_offerings_cache'):
+        return db.session.member_offerings_cache.get(member_id, [])
+    return []
 
 def map_headers_to_schema(headers):
     """
@@ -131,7 +395,26 @@ def validate_required_columns(headers, mapping):
     Validate that all required columns are present in the mapped headers.
     Returns validation result and missing columns.
     """
-    required_fields = ['businessName', 'country1', 'contactEmail', 'streetAddress1', 'city1', 'products', 'ingredients', 'companyBio']
+    # Required fields for this injection process (as specified in requirements)
+    required_fields = [
+        'businessName',      # Required - business name
+        'contactFullName',   # Required - contact full name
+        'contactEmail',      # Required - contact email
+        'streetAddress1',    # Required - street address
+        'city1',            # Required - city
+        'country1',         # Required - country
+        'companyBio'        # Required - company bio/business details
+    ]
+    
+    # Optional but important fields (not required but should be flagged if missing)
+    important_fields = [
+        'products',         # Important - products list
+        'ingredients',      # Important - ingredients list
+        'website',          # Important - website
+        'phone',           # Important - phone number
+        'stateOrProvince1', # Important - state/province
+        'zipCode1'         # Important - zip code
+    ]
     
     # Get mapped schema fields
     mapped_fields = set()
@@ -140,19 +423,28 @@ def validate_required_columns(headers, mapping):
             mapped_fields.add(header_info['schema_field'])
     
     # Check for missing required fields
-    missing_fields = []
+    missing_required = []
     for field in required_fields:
         if field not in mapped_fields:
-            missing_fields.append(field)
+            missing_required.append(field)
     
-    is_valid = len(missing_fields) == 0
+    # Check for missing important fields
+    missing_important = []
+    for field in important_fields:
+        if field not in mapped_fields:
+            missing_important.append(field)
+    
+    is_valid = len(missing_required) == 0
     
     return {
         'is_valid': is_valid,
-        'missing_fields': missing_fields,
+        'missing_fields': missing_required,
+        'missing_important': missing_important,
         'mapped_fields': list(mapped_fields),
         'total_headers': len(headers),
-        'mapped_headers': len(mapping)
+        'mapped_headers': len(mapping),
+        'required_fields': required_fields,
+        'important_fields': important_fields
     }
 
 def normalize_data_sample(file_path, headers, mapping, sample_size=10):
@@ -575,6 +867,10 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                 validation_errors.append({'row': idx, 'error': f"Email validation failed: {email_error}"})
                 continue
             
+            # Determine member offerings based on data presence
+            member_offerings = determine_member_offerings(row, custom_mapping or {})
+            current_app.logger.info(f"[etl] Row {idx}: Member offerings detected: {[o['title'] for o in member_offerings]}")
+            
             member = Member(
                 name=biz_sanitized,
                 contact_email=email_sanitized or None,
@@ -586,6 +882,12 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
             )
             db.session.add(member)
             db.session.flush()
+            
+            # Store member offerings for later use (when pushing to Dgraph)
+            # We'll store this in the session for now
+            if not hasattr(db.session, 'member_offerings_cache'):
+                db.session.member_offerings_cache = {}
+            db.session.member_offerings_cache[member.id] = member_offerings
 
             def handle(kind, cell):
                 nonlocal counter
@@ -768,3 +1070,4 @@ def convert_excel_to_csv_suggestion(filename):
         f"• File extension doesn't match actual format\n"
         f"• File was created by non-Excel software"
     )
+
