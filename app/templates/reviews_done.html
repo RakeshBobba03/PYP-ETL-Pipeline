@@ -136,13 +136,19 @@
         {% endif %}
       </div>
       
-      <form action="{{ url_for('main.push_to_dgraph') }}" method="post" style="margin-bottom:2rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn primary" style="width:16rem; font-size:1.15em;">
-          <i class="mdi mdi-upload"></i>
-          Push Data
-        </button>
-      </form>
+      <div style="display: flex; gap: 1rem; justify-content: center; margin-bottom:2rem; flex-wrap: wrap;">
+        <a href="{{ url_for('main.preview_mutations') }}" class="btn secondary" style="width:16rem; font-size:1.15em;">
+          <i class="mdi mdi-eye"></i>
+          Preview Mutations
+        </a>
+        <form action="{{ url_for('main.push_to_dgraph') }}" method="post" style="display: inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn primary" style="width:16rem; font-size:1.15em;">
+            <i class="mdi mdi-upload"></i>
+            Push Data
+          </button>
+        </form>
+      </div>
       
       <div style="background: rgba(212, 175, 55, 0.1); padding: 1rem; border-radius: 4px; border-left: 3px solid var(--primary); text-align: left; margin-bottom: 2rem;">
         <h4 style="color: var(--primary); margin: 0 0 0.5rem 0; font-size: 1rem;">

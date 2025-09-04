@@ -1,0 +1,217 @@
+{# app/templates/mutation_preview.html #}
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="container" style="max-width:1200px; margin-top:2rem;">
+
+    <div class="card" style="padding:2rem; margin-bottom:2rem;">
+      <h1 style="margin-bottom:1rem; color: var(--primary);">
+        <i class="mdi mdi-eye"></i> Mutation Preview
+      </h1>
+      
+      <p style="margin-bottom:1rem; color: var(--muted);">
+        This page shows you exactly what will happen when you submit your data to Dgraph. 
+        Review the mutations below to ensure everything looks correct before proceeding.
+      </p>
+      
+      <div style="background: rgba(74, 124, 89, 0.1); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; border: 1px solid rgba(74, 124, 89, 0.3);">
+        <p style="margin: 0; color: var(--primary);">
+          <i class="mdi mdi-information"></i>
+          <strong>Preview Summary:</strong> Showing <strong>{{ preview_count }}</strong> of <strong>{{ total_members }}</strong> members from submission <strong>{{ submission.name }}</strong>
+        </p>
+      </div>
+      
+      <div style="background: rgba(33, 150, 243, 0.1); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; border: 1px solid rgba(33, 150, 243, 0.3);">
+        <h3 style="margin: 0 0 0.5rem 0; color: var(--info);">
+          <i class="mdi mdi-information-outline"></i> What This Preview Shows
+        </h3>
+        <ul style="margin: 0; padding-left: 1.5rem; color: var(--text);">
+          <li><strong>Member Data:</strong> The actual data that will be stored for each member</li>
+          <li><strong>New Items:</strong> Products and ingredients that don't exist yet and will be created</li>
+          <li><strong>Existing Items:</strong> Items that already exist in Dgraph and will be linked to members</li>
+          <li><strong>GraphQL Mutation:</strong> The exact command that will be sent to Dgraph</li>
+        </ul>
+      </div>
+      
+      <div style="background: rgba(255, 193, 7, 0.1); padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; border: 1px solid rgba(255, 193, 7, 0.3);">
+        <h3 style="margin: 0 0 0.5rem 0; color: var(--warning);">
+          <i class="mdi mdi-cog"></i> How the Submission Process Works
+        </h3>
+        <ol style="margin: 0; padding-left: 1.5rem; color: var(--text);">
+          <li><strong>Step 1:</strong> Create any new products and ingredients that don't exist in Dgraph yet</li>
+          <li><strong>Step 2:</strong> Create member records with all their data and link them to products/ingredients</li>
+          <li><strong>Step 3:</strong> Verify all mutations were successful and log the results</li>
+        </ol>
+      </div>
+    </div>
+
+    {% for mutation in preview_mutations %}
+      <div class="card" style="padding:1.5rem; margin-bottom:2rem; border-left: 4px solid var(--accent);">
+        
+        <!-- Member Header -->
+        <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 1.5rem;">
+          <h2 style="margin: 0; color: var(--primary);">
+            <i class="mdi mdi-domain"></i> {{ mutation.member.businessName }}
+          </h2>
+          <div style="display: flex; gap: 1rem; font-size: 0.9rem; color: var(--muted);">
+            <span><i class="mdi mdi-package-variant"></i> {{ mutation.existing_products + mutation.new_products|length }} products</span>
+            <span><i class="mdi mdi-flask"></i> {{ mutation.existing_ingredients + mutation.new_ingredients|length }} ingredients</span>
+            <span><i class="mdi mdi-cog"></i> {{ mutation.member_offerings }} offerings</span>
+          </div>
+        </div>
+
+        <!-- Member Data Preview -->
+        <div style="margin-bottom: 1.5rem;">
+          <h3 style="color: var(--secondary); margin-bottom: 1rem;">
+            <i class="mdi mdi-account"></i> Member Data
+          </h3>
+          <p style="margin-bottom: 0.5rem; color: var(--muted); font-size: 0.9rem;">
+            This is the complete member information that will be stored in Dgraph, including business details, contact information, and location data.
+          </p>
+          <div style="background: var(--bg); padding: 1rem; border-radius: 6px; border: 1px solid var(--border);">
+            <pre style="margin: 0; font-family: 'Courier New', monospace; font-size: 0.9rem; color: var(--text); overflow-x: auto;">{{ mutation.member | tojson(indent=2) }}</pre>
+          </div>
+        </div>
+
+        <!-- New Products -->
+        {% if mutation.new_products %}
+          <div style="margin-bottom: 1.5rem;">
+            <h3 style="color: var(--success); margin-bottom: 1rem;">
+              <i class="mdi mdi-plus-circle"></i> New Products to Create
+            </h3>
+            <p style="margin-bottom: 0.5rem; color: var(--muted); font-size: 0.9rem;">
+              These products don't exist in Dgraph yet and will be created first before linking them to this member.
+            </p>
+            <div style="background: rgba(40, 167, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(40, 167, 69, 0.3);">
+              <ul style="margin: 0; padding-left: 1.5rem;">
+                {% for product in mutation.new_products %}
+                  <li style="margin-bottom: 0.5rem; color: var(--text);">{{ product }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        {% endif %}
+
+        <!-- New Ingredients -->
+        {% if mutation.new_ingredients %}
+          <div style="margin-bottom: 1.5rem;">
+            <h3 style="color: var(--success); margin-bottom: 1rem;">
+              <i class="mdi mdi-plus-circle"></i> New Ingredients to Create
+            </h3>
+            <p style="margin-bottom: 0.5rem; color: var(--muted); font-size: 0.9rem;">
+              These ingredients don't exist in Dgraph yet and will be created first before linking them to this member.
+            </p>
+            <div style="background: rgba(40, 167, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(40, 167, 69, 0.3);">
+              <ul style="margin: 0; padding-left: 1.5rem;">
+                {% for ingredient in mutation.new_ingredients %}
+                  <li style="margin-bottom: 0.5rem; color: var(--text);">{{ ingredient }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        {% endif %}
+
+        <!-- Existing Items Summary -->
+        {% if mutation.existing_products > 0 or mutation.existing_ingredients > 0 %}
+          <div style="margin-bottom: 1.5rem;">
+            <h3 style="color: var(--info); margin-bottom: 1rem;">
+              <i class="mdi mdi-link"></i> Existing Items to Link
+            </h3>
+            <p style="margin-bottom: 0.5rem; color: var(--muted); font-size: 0.9rem;">
+              These items already exist in Dgraph and will be linked to this member without creating duplicates.
+            </p>
+            <div style="background: rgba(23, 162, 184, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(23, 162, 184, 0.3);">
+              <p style="margin: 0; color: var(--text);">
+                {% if mutation.existing_products > 0 %}
+                  <strong>{{ mutation.existing_products }}</strong> existing products will be linked to this member.
+                {% endif %}
+                {% if mutation.existing_ingredients > 0 %}
+                  <strong>{{ mutation.existing_ingredients }}</strong> existing ingredients will be linked to this member.
+                {% endif %}
+              </p>
+            </div>
+          </div>
+        {% endif %}
+
+        <!-- GraphQL Mutation Preview -->
+        <div>
+          <h3 style="color: var(--warning); margin-bottom: 1rem;">
+            <i class="mdi mdi-code-json"></i> GraphQL Mutation Structure
+          </h3>
+          <p style="margin-bottom: 0.5rem; color: var(--muted); font-size: 0.9rem;">
+            This is the exact GraphQL mutation that will be sent to Dgraph. It includes all the member data and references to products/ingredients.
+          </p>
+          <div style="background: var(--card-bg); color: var(--text); padding: 1rem; border-radius: 6px; border: 1px solid var(--border);">
+            <pre style="margin: 0; font-family: 'Courier New', monospace; font-size: 0.85rem; overflow-x: auto; color: var(--text);"><code>mutation {
+  addMember(input: [{
+    businessName: "{{ mutation.member.businessName }}"
+    contactEmail: "{{ mutation.member.contactEmail or 'Not provided' }}"
+    streetAddress1: "{{ mutation.member.streetAddress1 }}"
+    city1: "{{ mutation.member.city1 or 'Not provided' }}"
+    country1: { countryID: "{{ mutation.member.country1.countryID }}" }
+    {% if mutation.member.companyBio %}companyBio: "{{ mutation.member.companyBio }}"{% endif %}
+    {% if mutation.member.products %}products: [
+      {% for product in mutation.member.products %}
+      { productID: "{{ product.productID }}" }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]{% endif %}
+    {% if mutation.member.ingredients %}ingredients: [
+      {% for ingredient in mutation.member.ingredients %}
+      { ingredientID: "{{ ingredient.ingredientID }}" }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]{% endif %}
+    {% if mutation.member.memberOfferings %}memberOfferings: [
+      {% for offering in mutation.member.memberOfferings %}
+      { offeringID: "{{ offering.offeringID }}" }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ]{% endif %}
+  }]) {
+    member {
+      memberID
+      businessName
+    }
+  }
+}</code></pre>
+          </div>
+        </div>
+
+      </div>
+    {% endfor %}
+
+    <!-- Action Buttons -->
+    <div class="card" style="padding:2rem; text-align:center;">
+      <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+        <form method="POST" action="{{ url_for('main.push_to_dgraph') }}" style="display: inline;">
+          <button type="submit" class="btn primary">
+            <i class="mdi mdi-rocket-launch"></i> Proceed with Submission
+          </button>
+        </form>
+        <a href="{{ url_for('main.review_list') }}" class="btn">
+          <i class="mdi mdi-arrow-left"></i> Back to Reviews
+        </a>
+        <a href="{{ url_for('main.upload_file') }}" class="btn">
+          <i class="mdi mdi-upload"></i> Upload New File
+        </a>
+      </div>
+      
+      <div style="margin-top: 1.5rem; padding: 1rem; background: rgba(255, 193, 7, 0.1); border-radius: 6px; border: 1px solid rgba(255, 193, 7, 0.3);">
+        <h4 style="margin: 0 0 0.5rem 0; color: var(--warning);">
+          <i class="mdi mdi-alert-circle"></i> Final Confirmation
+        </h4>
+        <p style="margin: 0; color: var(--warning); font-size: 0.9rem;">
+          <strong>Important:</strong> Once you click "Proceed with Submission", the following will happen:
+        </p>
+        <ul style="margin: 0.5rem 0 0 0; padding-left: 1.5rem; color: var(--warning); font-size: 0.9rem;">
+          <li>All new products and ingredients will be created in Dgraph</li>
+          <li>All {{ total_members }} member records will be created with their data</li>
+          <li>Members will be linked to their products and ingredients</li>
+          <li>This action cannot be undone</li>
+        </ul>
+        <p style="margin: 0.5rem 0 0 0; color: var(--warning); font-size: 0.9rem;">
+          <strong>Make sure you're satisfied with the preview above before proceeding.</strong>
+        </p>
+      </div>
+    </div>
+
+  </div>
+{% endblock %}

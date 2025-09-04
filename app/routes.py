@@ -778,6 +778,160 @@ def batch_ignore_all():
     current_app.logger.info("[batch_ignore_all] All pending review items ignored.")
     return redirect(url_for('main.review_list', status='warning', message='All pending items have been ignored.'))
 
+@main_bp.route('/reviews/preview_mutations')
+def preview_mutations():
+    """Preview the mutations that will be sent to Dgraph before actual submission"""
+    submission = MemberSubmission.query.order_by(MemberSubmission.id.desc()).first()
+    if not submission:
+        current_app.logger.warning("[preview_mutations] No submission found to preview.")
+        return redirect(url_for('main.upload_file', status='warning', message='No submission found to preview.'))
+
+    url = current_app.config.get('DGRAPH_URL')
+    token = current_app.config.get('DGRAPH_API_TOKEN')
+    
+    # Check if Dgraph is configured
+    if not url or not token:
+        current_app.logger.error("[preview_mutations] Dgraph not configured - cannot preview mutations")
+        return redirect(url_for('main.review_list', status='error', message='Dgraph is not configured. Please set DGRAPH_URL and DGRAPH_API_TOKEN environment variables.'))
+    
+    headers = {"Content-Type": "application/json", "Dg-Auth": token}
+    
+    current_app.logger.info(f"[preview_mutations] Generating mutation preview for submission: {submission.name}")
+    members = Member.query.filter_by(submission_id=submission.id).all()
+    current_app.logger.info(f"[preview_mutations] Found {len(members)} member record(s) to preview")
+
+    # Generate preview mutations (limit to first 3-5 members for preview)
+    preview_members = members[:5]  # Show first 5 members as preview
+    preview_mutations = []
+    
+    # Load valid countries from schema
+    def load_valid_countries_from_schema():
+        try:
+            with open('listallcountries.json', 'r') as f:
+                data = json.load(f)
+                countries = data.get('data', {}).get('queryMemberCountry', [])
+                return {country['title']: country['countryID'] for country in countries}
+        except Exception as e:
+            current_app.logger.warning(f"[preview_mutations] Could not load valid countries from schema: {e}")
+            return {}
+    
+    valid_countries_schema = load_valid_countries_from_schema()
+    
+    def lookup_ref_preview(ref_type_query, var_name, title, id_field):
+        """Simplified lookup for preview - just return the structure without actual query"""
+        return {id_field: f"<{id_field}_placeholder>"}
+    
+    for m in preview_members:
+        biz = m.name or "(Unknown)"
+        try:
+            # Country lookup for preview
+            if not m.country1 or m.country1 not in valid_countries_schema:
+                continue
+                
+            country_ref = lookup_ref_preview("queryMemberCountry", "country", m.country1, "countryID")
+            
+            # Get all products and ingredients for this member
+            all_products = [ni for ni in m.new_items if ni.type=="product" and not ni.ignored]
+            all_ingredients = [ni for ni in m.new_items if ni.type=="ingredient" and not ni.ignored]
+            
+            # Separate resolved vs unresolved items
+            resolved_products = [ni for ni in all_products if ni.resolved and ni.matched_canonical_id]
+            unresolved_products = [ni for ni in all_products if not ni.resolved]
+            
+            resolved_ingredients = [ni for ni in all_ingredients if ni.resolved and ni.matched_canonical_id]
+            unresolved_ingredients = [ni for ni in all_ingredients if not ni.resolved]
+            
+            # Collect product IDs (existing + resolved + new)
+            existing_product_ids = []
+            new_product_names = []
+            
+            # Add resolved product IDs
+            for ni in resolved_products:
+                if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                    # Multiple selections
+                    for alt in ni.review.alternatives:
+                        if isinstance(alt, dict) and alt.get('selected'):
+                            existing_product_ids.append(alt.get('ext_id'))
+                else:
+                    # Single selection
+                    if ni.matched_canonical_id:
+                        existing_product_ids.append(ni.matched_canonical_id)
+            
+            # Check unresolved products
+            for ni in unresolved_products:
+                new_product_names.append(ni.name)
+            
+            # Same logic for ingredients
+            existing_ingredient_ids = []
+            new_ingredient_names = []
+            
+            for ni in resolved_ingredients:
+                if hasattr(ni, 'review') and ni.review and ni.review.alternatives:
+                    for alt in ni.review.alternatives:
+                        if isinstance(alt, dict) and alt.get('selected'):
+                            existing_ingredient_ids.append(alt.get('ext_id'))
+                else:
+                    if ni.matched_canonical_id:
+                        existing_ingredient_ids.append(ni.matched_canonical_id)
+            
+            for ni in unresolved_ingredients:
+                new_ingredient_names.append(ni.name)
+            
+            # Build member input for preview
+            member_input = {
+                "businessName": biz,
+                "country1": country_ref,
+                "streetAddress1": m.street_address1 if (m.street_address1 and m.street_address1.strip()) else "Not provided",
+            }
+            
+            if m.contact_email and m.contact_email.strip():
+                member_input["contactEmail"] = m.contact_email
+            if m.city1 and m.city1.strip():
+                member_input["city1"] = m.city1
+            if m.company_bio and m.company_bio.strip():
+                member_input["companyBio"] = m.company_bio
+            
+            # Add products and ingredients
+            all_product_ids = existing_product_ids + [f"<new_product_{name}>" for name in new_product_names]
+            all_ingredient_ids = existing_ingredient_ids + [f"<new_ingredient_{name}>" for name in new_ingredient_names]
+            
+            if all_product_ids:
+                member_input["products"] = [{"productID": pid} for pid in all_product_ids]
+            if all_ingredient_ids:
+                member_input["ingredients"] = [{"ingredientID": iid} for iid in all_ingredient_ids]
+            
+            # Add member offerings
+            member_offerings = get_member_offerings_from_cache(m.id)
+            if member_offerings:
+                offering_refs = []
+                for offering in member_offerings:
+                    offering_refs.append({"offeringID": offering['uid']})
+                member_input["memberOfferings"] = offering_refs
+            
+            # Create the mutation structure
+            mutation_preview = {
+                "member": member_input,
+                "new_products": new_product_names,
+                "new_ingredients": new_ingredient_names,
+                "existing_products": len(existing_product_ids),
+                "existing_ingredients": len(existing_ingredient_ids),
+                "member_offerings": len(member_offerings) if member_offerings else 0
+            }
+            
+            preview_mutations.append(mutation_preview)
+            
+        except Exception as ex:
+            current_app.logger.warning(f"[preview_mutations] Error generating preview for '{biz}': {ex}")
+            continue
+    
+    return render_template(
+        'mutation_preview.html',
+        submission=submission,
+        preview_mutations=preview_mutations,
+        total_members=len(members),
+        preview_count=len(preview_mutations)
+    )
+
 @main_bp.route('/reviews/push', methods=['POST'])
 def push_to_dgraph():
     submission = MemberSubmission.query.order_by(MemberSubmission.id.desc()).first()
