@@ -5,6 +5,7 @@ import openpyxl
 import requests
 import html
 import zipfile
+import math
 from sqlalchemy.exc import SQLAlchemyError
 from rapidfuzz import process, fuzz, utils
 from flask import current_app
@@ -15,6 +16,7 @@ BATCH_SIZE = 1000
 # Configurable thresholds
 FUZZY_MATCH_THRESHOLD = float(os.getenv('FUZZY_MATCH_THRESHOLD', '80.0'))
 AUTO_RESOLVE_THRESHOLD = float(os.getenv('AUTO_RESOLVE_THRESHOLD', '95.0'))  # Higher threshold for auto-resolution
+AUTO_REJECT_THRESHOLD = float(os.getenv('AUTO_REJECT_THRESHOLD', '50.0'))  # Auto-reject if score below this threshold
 
 # Enhanced scoring penalty configuration
 LENGTH_PENALTY_MULTIPLIER = float(os.getenv('LENGTH_PENALTY_MULTIPLIER', '30.0'))  # Length difference penalty
@@ -112,6 +114,25 @@ MEMBER_SCHEMA_FIELDS = {
 def get_schema_field_mapping():
     """Get the schema field mapping for header validation"""
     return MEMBER_SCHEMA_FIELDS
+
+def is_empty_or_invalid(value):
+    """
+    Check if a value is empty or invalid according to requirements.
+    Handles: '', 'null', 'none', 'n/a', NaN (actual NaN values)
+    """
+    if value is None:
+        return True
+    
+    # Handle actual NaN values (from pandas/Excel)
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    
+    # Handle string values
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized in ('', 'null', 'none', 'n/a', 'na', 'nan')
+    
+    return False
 
 def fetch_member_offerings_from_dgraph():
     """
@@ -233,6 +254,18 @@ def get_member_offerings_mapping():
             'title': 'Spaces',
             'fallback_uid': '0x19f18f'
         },
+        'typeOfSpace': {
+            'title': 'Spaces',
+            'fallback_uid': '0x19f18f'
+        },
+        'typeOfAgreement': {
+            'title': 'Spaces',
+            'fallback_uid': '0x19f18f'
+        },
+        'facilityAmenities': {
+            'title': 'Spaces',
+            'fallback_uid': '0x19f18f'
+        },
         'manufacturingServices': {
             'title': 'Manufacturing',
             'fallback_uid': '0x2c411f'
@@ -271,22 +304,60 @@ def determine_member_offerings(member_data, mapping):
     
     # Check each field that could indicate an offering
     for field_name, offering_info in offerings_mapping.items():
-        # Check if this field is mapped in the CSV and has data
-        for csv_header, header_info in mapping.items():
-            if (isinstance(header_info, dict) and 
-                header_info.get('schema_field') == field_name and
-                member_data.get(csv_header)):
-                
-                # Check if the field has meaningful data
-                field_value = member_data.get(csv_header, '').strip()
-                if field_value and field_value.lower() not in ['', 'n/a', 'none', 'null', 'undefined']:
-                    offerings.append({
-                        'title': offering_info['title'],
-                        'uid': offering_info['uid'],
-                        'source_field': field_name,
-                        'source_value': field_value
-                    })
-                    break  # Found this offering, move to next
+        # Special case for Manufacturing: check both manufacturingServices AND presence of products
+        if field_name == 'manufacturingServices':
+            manufacturing_detected = False
+            
+            # Check for manufacturingServices field
+            for csv_header, header_info in mapping.items():
+                if (isinstance(header_info, dict) and 
+                    header_info.get('schema_field') == field_name and
+                    member_data.get(csv_header)):
+                    
+                    field_value = member_data.get(csv_header, '').strip()
+                    if field_value and field_value.lower() not in ['', 'n/a', 'none', 'null', 'undefined']:
+                        offerings.append({
+                            'title': offering_info['title'],
+                            'uid': offering_info['uid'],
+                            'source_field': field_name,
+                            'source_value': field_value
+                        })
+                        manufacturing_detected = True
+                        break
+            
+            # Also check for presence of products (as per requirements: "manufacturingServices or presence of products")
+            if not manufacturing_detected:
+                for csv_header, header_info in mapping.items():
+                    if (isinstance(header_info, dict) and 
+                        header_info.get('schema_field') == 'products' and
+                        member_data.get(csv_header)):
+                        
+                        field_value = member_data.get(csv_header, '').strip()
+                        if field_value and field_value.lower() not in ['', 'n/a', 'none', 'null', 'undefined']:
+                            offerings.append({
+                                'title': offering_info['title'],
+                                'uid': offering_info['uid'],
+                                'source_field': 'products',
+                                'source_value': field_value
+                            })
+                            break
+        else:
+            # Regular field checking for all other offerings
+            for csv_header, header_info in mapping.items():
+                if (isinstance(header_info, dict) and 
+                    header_info.get('schema_field') == field_name and
+                    member_data.get(csv_header)):
+                    
+                    # Check if the field has meaningful data
+                    field_value = member_data.get(csv_header, '').strip()
+                    if field_value and field_value.lower() not in ['', 'n/a', 'none', 'null', 'undefined']:
+                        offerings.append({
+                            'title': offering_info['title'],
+                            'uid': offering_info['uid'],
+                            'source_field': field_name,
+                            'source_value': field_value
+                        })
+                        break  # Found this offering, move to next
     
     # Special case: if no offerings detected, add "No Offerings"
     if not offerings:
@@ -508,19 +579,19 @@ def normalize_row_data(row, headers, mapping):
             value = row.get(header, '')
             
             # Normalize the value
-            if value is not None:
+            if is_empty_or_invalid(value):
+                value = ''
+            else:
                 value = str(value).strip()
-                if value.lower() in ('', 'null', 'none', 'n/a', 'na', 'nan'):
-                    value = ''
             
             normalized[schema_field] = value
         else:
             # Unmapped header - store with original name
             value = row.get(header, '')
-            if value is not None:
+            if is_empty_or_invalid(value):
+                value = ''
+            else:
                 value = str(value).strip()
-                if value.lower() in ('', 'null', 'none', 'n/a', 'na', 'nan'):
-                    value = ''
             normalized[f"unmapped_{header}"] = value
     
     return normalized
@@ -563,6 +634,10 @@ def get_fuzzy_match_threshold():
 def get_auto_resolve_threshold():
     """Get auto-resolution threshold from environment or use default"""
     return AUTO_RESOLVE_THRESHOLD
+
+def get_auto_reject_threshold():
+    """Get auto-reject threshold from environment or use default"""
+    return AUTO_REJECT_THRESHOLD
 
 def apply_match_penalties(text_sanitized, match_name, raw_score):
     """
@@ -617,6 +692,124 @@ def sanitize_string(value):
     value = re.sub(r'<[^>]+>', '', value)  # Remove HTML tags
     value = html.escape(value)  # Escape HTML entities
     return value
+
+def normalize_offering_text(text):
+    """
+    Advanced normalization for offering text with capital case, punctuation handling,
+    and common variant normalization.
+    
+    Requirements:
+    - Capital Case, trim, remove punctuation (but preserve relevant characters like hyphens, periods for scientific names)
+    - Normalize common variants (e.g., "vit C" → "Vitamin C")
+    - Full names for new offerings (e.g., "B. adolescentis" → "Bifidobacterium adolescentis")
+    """
+    if not text or not isinstance(text, str):
+        return text
+    
+    # Step 1: Basic cleanup
+    text = text.strip()
+    if not text:
+        return text
+    
+    # Step 2: Collapse multiple whitespace
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Step 3: Common variant normalization (before punctuation removal)
+    variant_mappings = {
+        # Vitamin variants
+        r'\bvit\s+c\b': 'Vitamin C',
+        r'\bvit\s+d\b': 'Vitamin D',
+        r'\bvit\s+b\b': 'Vitamin B',
+        r'\bvit\s+e\b': 'Vitamin E',
+        r'\bvit\s+a\b': 'Vitamin A',
+        r'\bvit\s+k\b': 'Vitamin K',
+        
+        # Common abbreviations
+        r'\bprobiotics?\b': 'Probiotics',
+        r'\bprebiotics?\b': 'Prebiotics',
+        r'\bomega\s*3\b': 'Omega-3',
+        r'\bomega\s*6\b': 'Omega-6',
+        r'\bomega\s*9\b': 'Omega-9',
+        r'\bcoq10\b': 'CoQ10',
+        r'\bco\s*q\s*10\b': 'CoQ10',
+        
+        # Scientific name expansions
+        r'\bB\.\s*adolescentis\b': 'Bifidobacterium adolescentis',
+        r'\bB\.\s*lactis\b': 'Bifidobacterium lactis',
+        r'\bB\.\s*bifidum\b': 'Bifidobacterium bifidum',
+        r'\bL\.\s*acidophilus\b': 'Lactobacillus acidophilus',
+        r'\bL\.\s*rhamnosus\b': 'Lactobacillus rhamnosus',
+        r'\bL\.\s*casei\b': 'Lactobacillus casei',
+        r'\bS\.\s*boulardii\b': 'Saccharomyces boulardii',
+        r'\bS\.\s*cerevisiae\b': 'Saccharomyces cerevisiae',
+        
+        # Common ingredient variants
+        r'\bstevia\b': 'Stevia',
+        r'\bmonk\s*fruit\b': 'Monk Fruit',
+        r'\bmonkfruit\b': 'Monk Fruit',
+        r'\bchicory\s*root\b': 'Chicory Root',
+        r'\binulin\b': 'Inulin',
+        r'\bpectin\b': 'Pectin',
+        r'\bguar\s*gum\b': 'Guar Gum',
+        r'\bxanthan\s*gum\b': 'Xanthan Gum',
+        r'\bcarrageenan\b': 'Carrageenan',
+        r'\bagar\b': 'Agar',
+        r'\bgelatin\b': 'Gelatin',
+        r'\bgelatine\b': 'Gelatin',
+    }
+    
+    # Apply variant mappings (case-insensitive)
+    for pattern, replacement in variant_mappings.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    
+    # Step 4: Remove punctuation but preserve scientific/chemical notation
+    # Keep: hyphens, periods (for scientific names), parentheses, numbers
+    # Remove: commas, semicolons, exclamation marks, question marks, quotes, etc.
+    text = re.sub(r'[,\;\!\?\'\""\[\]{}]', '', text)
+    
+    # Step 5: Capital Case normalization
+    # Split into words and capitalize each word appropriately
+    words = text.split()
+    normalized_words = []
+    
+    for word in words:
+        if not word:
+            continue
+            
+        # Handle special cases
+        if word.lower() in ['and', 'or', 'of', 'the', 'in', 'on', 'at', 'to', 'for', 'with', 'by']:
+            # Keep common words lowercase unless they're the first word
+            if not normalized_words:
+                normalized_words.append(word.capitalize())
+            else:
+                normalized_words.append(word.lower())
+        elif '-' in word:
+            # Handle hyphenated words (e.g., "Omega-3", "CoQ10")
+            parts = word.split('-')
+            capitalized_parts = []
+            for part in parts:
+                if part:
+                    capitalized_parts.append(part.capitalize())
+            normalized_words.append('-'.join(capitalized_parts))
+        elif '.' in word and len(word) > 1:
+            # Handle scientific abbreviations (e.g., "B.adolescentis")
+            parts = word.split('.')
+            capitalized_parts = []
+            for part in parts:
+                if part:
+                    capitalized_parts.append(part.capitalize())
+            normalized_words.append('.'.join(capitalized_parts))
+        else:
+            # Regular word capitalization
+            normalized_words.append(word.capitalize())
+    
+    # Join words back together
+    result = ' '.join(normalized_words)
+    
+    # Step 6: Final cleanup - remove extra spaces
+    result = re.sub(r'\s+', ' ', result).strip()
+    
+    return result
 
 def validate_business_name(name):
     """Validate business name for security and data quality"""
@@ -796,30 +989,43 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
         query {
           products: queryProduct { title productID }
           ingredients: queryIngredients { title ingredientID }
+          certifications: queryCertification { title certID }
+          allergens: queryAllergen { title charID }
         }
         """
         try:
             current_app.logger.info("[etl] Fetching canonical products/ingredients from Dgraph…")
+            current_app.logger.info(f"[etl] Dgraph URL: {url}")
+            current_app.logger.info(f"[etl] GraphQL Query: {gql}")
             resp = requests.post(url, json={"query": gql}, headers={"Content-Type": "application/json", "Dg-Auth": token}, timeout=10)
             resp.raise_for_status()
-            data = resp.json().get("data", {})
-            current_app.logger.info(f"[etl] Canonical products: {len(data.get('products',[]))}, ingredients: {len(data.get('ingredients',[]))}")
+            response_data = resp.json()
+            current_app.logger.info(f"[etl] Raw Dgraph response: {response_data}")
+            data = response_data.get("data", {})
+            current_app.logger.info(f"[etl] Canonical products: {len(data.get('products',[]))}, ingredients: {len(data.get('ingredients',[]))}, certifications: {len(data.get('certifications',[]))}, allergens: {len(data.get('allergens',[]))}")
         except Exception as e:
             current_app.logger.error(f"[etl] Could not fetch canonical: {e}")
+            current_app.logger.error(f"[etl] Dgraph URL: {url}")
+            current_app.logger.error(f"[etl] GraphQL Query: {gql}")
             data = {}
 
     prod_map   = {p['title']: p['productID']   for p in data.get("products", [])}
     ing_map    = {i['title']: i['ingredientID'] for i in data.get("ingredients", [])}
+    cert_map   = {c['title']: c['certID'] for c in data.get("certifications", [])}
+    allergen_map = {a['title']: a['charID'] for a in data.get("allergens", [])}
+    
     prod_lower = {t.lower(): ext for t,ext in prod_map.items()}
     ing_lower  = {t.lower(): ext for t,ext in ing_map.items()}
+    cert_lower = {t.lower(): ext for t,ext in cert_map.items()}
+    allergen_lower = {t.lower(): ext for t,ext in allergen_map.items()}
+    
     prod_names = list(prod_map.keys())
     ing_names  = list(ing_map.keys())
+    cert_names = list(cert_map.keys())
+    allergen_names = list(allergen_map.keys())
 
     def is_valid(v):
-        if v is None: return False
-        if isinstance(v, str) and v.strip().lower() in ('', 'null', 'none', 'n/a', 'na', 'nan'):
-            return False
-        return True
+        return not is_empty_or_invalid(v)
 
     validation_errors = []
     valid_row_indices = []
@@ -891,23 +1097,61 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
 
             def handle(kind, cell):
                 nonlocal counter
-                kindstr = "Product" if kind == "product" else "Ingredient"
+                kind_mapping = {
+                    'product': 'Product',
+                    'ingredient': 'Ingredient', 
+                    'certification': 'Certification',
+                    'allergen': 'Allergen'
+                }
+                kindstr = kind_mapping.get(kind, kind.title())
                 current_app.logger.info(f"[etl] Row {idx}: Handling {kindstr}s for member '{biz}'…")
                 if not is_valid(cell):
                     current_app.logger.info(f"[etl] Row {idx}: No {kindstr}s listed.")
                     return
                 fragments = re.split(r'[;,]', str(cell))
+                
+                # Deduplication: Track processed items to avoid duplicates within the same row
+                processed_items = set()
+                
                 for raw in fragments:
                     text = raw.strip()
                     if not is_valid(text):
                         current_app.logger.info(f"[etl] Row {idx}: Skipping blank/invalid {kindstr}.")
                         continue
                     
-                    # Sanitize item name
-                    text_sanitized = sanitize_string(text)
+                    # Normalize and sanitize item name
+                    text_normalized = normalize_offering_text(text)
+                    text_sanitized = sanitize_string(text_normalized)
+                    
+                    # Check for duplicates within this row
+                    if text_sanitized.lower() in processed_items:
+                        current_app.logger.info(f"[etl] Row {idx}: Skipping duplicate {kindstr}: '{text_sanitized}'")
+                        continue
+                    
+                    # Add to processed items set
+                    processed_items.add(text_sanitized.lower())
                     ni = NewItem(name=text_sanitized, type=kind, member=member)
-                    lower_map = prod_lower if kind == 'product' else ing_lower
-                    pool      = prod_names if kind == 'product' else ing_names
+                    
+                    # Get the appropriate mapping based on kind
+                    if kind == 'product':
+                        lower_map = prod_lower
+                        pool = prod_names
+                        ext_map = prod_map
+                    elif kind == 'ingredient':
+                        lower_map = ing_lower
+                        pool = ing_names
+                        ext_map = ing_map
+                    elif kind == 'certification':
+                        lower_map = cert_lower
+                        pool = cert_names
+                        ext_map = cert_map
+                    elif kind == 'allergen':
+                        lower_map = allergen_lower
+                        pool = allergen_names
+                        ext_map = allergen_map
+                    else:
+                        current_app.logger.warning(f"[etl] Row {idx}: Unknown kind '{kind}', skipping")
+                        continue
 
                     # Exact match
                     ext_id = lower_map.get(text_sanitized.lower())
@@ -965,20 +1209,24 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                         
                         current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) best match after penalties: '{name0}' (score {final_score:.1f}%)")
                         
-                        # Use configurable threshold
+                        # Use configurable thresholds
                         threshold = get_fuzzy_match_threshold()
                         auto_resolve_threshold = get_auto_resolve_threshold()
+                        auto_reject_threshold = get_auto_reject_threshold()
                         
-                        # Simplified logic using adjusted scores - the penalties already handle most edge cases
+                        # Implement proper threshold logic as per requirements:
+                        # Auto-accept if score ≥ 95% (configurable)
+                        # Auto-reject if score < 50% (but still show as candidate "No match")
+                        # Flag for review if 50% ≤ score < 95% (thresholds adjustable)
                         if final_score >= auto_resolve_threshold:
                             # High confidence - auto-resolve (penalties already applied)
-                            ni.matched_canonical_id = (prod_map if kind == 'product' else ing_map)[name0]
+                            ni.matched_canonical_id = ext_map[name0]
                             ni.score = final_score
                             ni.resolved = True
                             current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) auto-resolved with '{name0}' (score {final_score:.1f}%)")
-                        elif final_score >= threshold:
+                        elif final_score >= auto_reject_threshold:
                             # Medium confidence - create review but mark as suggested
-                            ni.matched_canonical_id = (prod_map if kind == 'product' else ing_map)[name0]
+                            ni.matched_canonical_id = ext_map[name0]
                             ni.score = final_score
                             ni.resolved = False  # Don't auto-resolve, require review
                             current_app.logger.info(f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) suggested match '{name0}' (score {final_score:.1f}%) - requires review")
@@ -986,11 +1234,10 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                             # Create review for suggested match with alternatives
                             # Use the already calculated penalized matches as alternatives
                             alts = []
-                            ext_map = prod_map if kind == 'product' else ing_map
                             
-                            # Use penalized_matches but exclude the best match
+                            # Use penalized_matches but exclude the best match and filter out low-confidence matches
                             for alt_name, alt_score in penalized_matches:
-                                if alt_name != name0:  # Skip the best match
+                                if alt_name != name0 and alt_score >= auto_reject_threshold:  # Skip the best match and low-confidence matches
                                     alt_ext_id = ext_map.get(alt_name)
                                     alts.append({"name": alt_name, "score": alt_score, "ext_id": alt_ext_id})
                                     # Stop when we have 3 alternatives
@@ -999,33 +1246,25 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                             
                             mr = MatchReview(
                                 new_item=ni, suggested_name=name0,
-                                suggested_ext_id=(prod_map if kind == 'product' else ing_map)[name0],
+                                suggested_ext_id=ext_map[name0],
                                 score=final_score, alternatives=alts, approved=None
                             )
                             db.session.add(mr)
                         else:
-                            # Low confidence - require manual review
+                            # Low confidence - auto-reject (no alternatives shown since all are below threshold)
                             alts = []
-                            ext_map = prod_map if kind == 'product' else ing_map
                             suggested_ext_id = ext_map.get(name0) if name0 else None
-                            
-                            # Use penalized_matches but exclude the best match
-                            for alt_name, alt_score in penalized_matches:
-                                if alt_name != name0:  # Skip the best match
-                                    alt_ext_id = ext_map.get(alt_name)
-                                    alts.append({"name": alt_name, "score": alt_score, "ext_id": alt_ext_id})
-                                    # Stop when we have 3 alternatives
-                                    if len(alts) >= 3:
-                                        break
                                     
                             current_app.logger.info(
-                                f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) no good match found (score {final_score:.1f}%), will require review. Top guess: '{name0}'."
+                                f"[etl] Row {idx}: '{text_sanitized}' ({kindstr}) auto-rejected (score {final_score:.1f}% < {auto_reject_threshold}%) - no good match found. Top guess: '{name0}'."
                             )
                             mr = MatchReview(
                                 new_item=ni, suggested_name=name0 or text_sanitized,
                                 suggested_ext_id=suggested_ext_id,
-                                score=final_score, alternatives=alts, approved=None
+                                score=final_score, alternatives=alts, approved=False
                             )
+                            # Set ignored flag on the NewItem instead
+                            ni.ignored = True
                             db.session.add(mr)
                     db.session.add(ni)
                     counter += 1
@@ -1035,6 +1274,8 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
 
             handle('product', get(row, 'products'))
             handle('ingredient', get(row, 'ingredients'))
+            handle('certification', get(row, 'certifications'))
+            handle('allergen', get(row, 'allergens'))
         except SQLAlchemyError as ex:
             err_msg = f"DB error: {ex}"
             current_app.logger.error(f"[etl] Row {idx}: {err_msg}")

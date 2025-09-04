@@ -1,5 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
+  <!-- Toast notifications for validation feedback -->
+  <script>
+    // Show toast notifications based on URL parameters
+    document.addEventListener('DOMContentLoaded', function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const status = urlParams.get('status');
+      const message = urlParams.get('message');
+      
+      if (status && message) {
+        const decodedMessage = decodeURIComponent(message);
+        switch(status) {
+          case 'success':
+            showSuccess(decodedMessage);
+            break;
+          case 'error':
+            showError(decodedMessage);
+            break;
+          case 'warning':
+            showWarning(decodedMessage);
+            break;
+          case 'info':
+            showInfo(decodedMessage);
+            break;
+        }
+        
+        // Clean up URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    });
+  </script>
 <div class="card">
   <h2><i class="mdi mdi-file-check"></i> Header Validation & Mapping</h2>
   <p>Review and confirm how your file headers map to the Member schema fields.</p>

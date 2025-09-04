@@ -10,7 +10,6 @@
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/toasts.css') }}">
     
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/company-logo.png') }}">
@@ -87,7 +86,7 @@
     </footer>
 
     <!-- Toast Container -->
-    <div id="toast-container"></div>
+    <div id="toast-container" style="position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 400px; pointer-events: none;"></div>
 
     <!-- JavaScript -->
     <script>
@@ -238,6 +237,152 @@
         window.addEventListener('online', updateNetworkStatus);
         window.addEventListener('offline', updateNetworkStatus);
         updateNetworkStatus();
+    </script>
+
+    <!-- Toast Notification System -->
+    <script>
+        // Toast notification system
+        class ToastManager {
+            constructor() {
+                this.container = document.getElementById('toast-container');
+                this.toasts = new Map();
+            }
+
+            show(message, type = 'info', duration = 5000, title = null) {
+                const id = Date.now() + Math.random();
+                const toast = this.createToast(id, message, type, duration, title);
+                
+                this.container.appendChild(toast);
+                this.toasts.set(id, toast);
+
+                // Trigger animation
+                requestAnimationFrame(() => {
+                    toast.style.opacity = '1';
+                    toast.style.transform = 'translateX(0)';
+                });
+
+                // Auto remove
+                if (duration > 0) {
+                    setTimeout(() => {
+                        this.remove(id);
+                    }, duration);
+                }
+
+                return id;
+            }
+
+            createToast(id, message, type, duration, title) {
+                const toast = document.createElement('div');
+                toast.className = `toast ${type}`;
+                toast.dataset.id = id;
+                
+                // Add inline styles to ensure visibility
+                toast.style.cssText = `
+                    background: #1a1a1a;
+                    border: 1px solid #333333;
+                    border-radius: 8px;
+                    padding: 16px;
+                    margin-bottom: 12px;
+                    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 12px;
+                    opacity: 0;
+                    transform: translateX(100%);
+                    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                    position: relative;
+                    overflow: hidden;
+                    min-width: 300px;
+                    max-width: 400px;
+                    z-index: 10000;
+                    pointer-events: auto;
+                `;
+
+                const icon = this.getIcon(type);
+                const progressBar = duration > 0 ? `<div class="toast-progress" style="position: absolute; bottom: 0; left: 0; height: 3px; background: #4a7c59; border-radius: 0 0 8px 8px; transition: width linear; animation-duration: ${duration}ms;"></div>` : '';
+                const titleHtml = title ? `<div class="toast-title" style="font-weight: 600; color: #ffffff; margin: 0 0 4px 0; font-size: 14px;">${title}</div>` : '';
+
+                toast.innerHTML = `
+                    <div class="toast-icon ${type}" style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; color: white; background: ${this.getIconColor(type)};">
+                        <i class="mdi ${icon}"></i>
+                    </div>
+                    <div class="toast-content" style="flex: 1; min-width: 0;">
+                        ${titleHtml}
+                        <div class="toast-message" style="color: #888888; margin: 0; font-size: 13px; line-height: 1.4;">${message}</div>
+                    </div>
+                    <button class="toast-close" onclick="toastManager.remove(${id})" style="background: none; border: none; color: #888888; cursor: pointer; padding: 0; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.2s ease; flex-shrink: 0;">
+                        <i class="mdi mdi-close"></i>
+                    </button>
+                    ${progressBar}
+                `;
+
+                return toast;
+            }
+            
+            getIconColor(type) {
+                const colors = {
+                    success: '#28a745',
+                    error: '#dc3545',
+                    warning: '#ffc107',
+                    info: '#17a2b8'
+                };
+                return colors[type] || colors.info;
+            }
+
+            getIcon(type) {
+                const icons = {
+                    success: 'mdi-check',
+                    error: 'mdi-alert-circle',
+                    warning: 'mdi-alert',
+                    info: 'mdi-information'
+                };
+                return icons[type] || icons.info;
+            }
+
+            remove(id) {
+                const toast = this.toasts.get(id);
+                if (toast) {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateX(100%)';
+                    setTimeout(() => {
+                        if (toast.parentNode) {
+                            toast.parentNode.removeChild(toast);
+                        }
+                        this.toasts.delete(id);
+                    }, 300);
+                }
+            }
+
+            clear() {
+                this.toasts.forEach((toast, id) => {
+                    this.remove(id);
+                });
+            }
+        }
+
+        // Initialize toast manager
+        const toastManager = new ToastManager();
+
+        // Global toast functions
+        window.showToast = (message, type = 'info', duration = 5000, title = null) => {
+            return toastManager.show(message, type, duration, title);
+        };
+
+        window.showSuccess = (message, duration = 5000, title = null) => {
+            return toastManager.show(message, 'success', duration, title);
+        };
+
+        window.showError = (message, duration = 5000, title = null) => {
+            return toastManager.show(message, 'error', duration, title);
+        };
+
+        window.showWarning = (message, duration = 5000, title = null) => {
+            return toastManager.show(message, 'warning', duration, title);
+        };
+
+        window.showInfo = (message, duration = 5000, title = null) => {
+            return toastManager.show(message, 'info', duration, title);
+        };
     </script>
 
     {% block extra_scripts %}{% endblock %}

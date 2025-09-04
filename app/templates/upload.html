@@ -1,5 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
+  <!-- Toast notifications for upload feedback -->
+  <script>
+    // Show toast notifications based on URL parameters
+    document.addEventListener('DOMContentLoaded', function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const status = urlParams.get('status');
+      const message = urlParams.get('message');
+      
+      if (status && message) {
+        const decodedMessage = decodeURIComponent(message);
+        
+        // Wait a bit for toast functions to be available
+        setTimeout(() => {
+          switch(status) {
+            case 'success':
+              if (typeof showSuccess === 'function') {
+                showSuccess(decodedMessage);
+              }
+              break;
+            case 'error':
+              if (typeof showError === 'function') {
+                showError(decodedMessage);
+              }
+              break;
+            case 'warning':
+              if (typeof showWarning === 'function') {
+                showWarning(decodedMessage);
+              }
+              break;
+            case 'info':
+              if (typeof showInfo === 'function') {
+                showInfo(decodedMessage);
+              }
+              break;
+          }
+        }, 100);
+        
+        // Clean up URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    });
+  </script>
   <div class="card">
     <h2><i class="mdi mdi-upload"></i> Upload New Member File</h2>
     <p>Accepts <code>.xlsx</code>, <code>.xls</code> or <code>.csv</code> files for PYP member data processing.</p>

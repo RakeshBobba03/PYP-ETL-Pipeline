@@ -1,6 +1,64 @@
 {% extends "base.html" %}
 
 {% block content %}
+  <!-- Toast notifications for review feedback -->
+  <script>
+    // Show toast notifications based on URL parameters
+    document.addEventListener('DOMContentLoaded', function() {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const status = urlParams.get('status');
+        const message = urlParams.get('message');
+        
+        if (status && message) {
+          const decodedMessage = decodeURIComponent(message);
+          
+          // Wait a bit for toast functions to be available
+          setTimeout(() => {
+            try {
+              switch(status) {
+                case 'success':
+                  if (typeof showSuccess === 'function') {
+                    showSuccess(decodedMessage);
+                  } else {
+                    console.error('showSuccess function not available');
+                  }
+                  break;
+                case 'error':
+                  if (typeof showError === 'function') {
+                    showError(decodedMessage);
+                  } else {
+                    console.error('showError function not available');
+                  }
+                  break;
+                case 'warning':
+                  if (typeof showWarning === 'function') {
+                    showWarning(decodedMessage);
+                  } else {
+                    console.error('showWarning function not available');
+                  }
+                  break;
+                case 'info':
+                  if (typeof showInfo === 'function') {
+                    showInfo(decodedMessage);
+                  } else {
+                    console.error('showInfo function not available');
+                  }
+                  break;
+              }
+            } catch (error) {
+              console.error('Error showing toast:', error);
+            }
+          }, 100);
+          
+          // Clean up URL parameters
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      } catch (error) {
+        console.error('Error processing URL parameters:', error);
+      }
+    });
+  </script>
   <div class="d-flex align-items-center mb-4">
     <h2><i class="mdi mdi-clipboard-list-outline"></i> Review Matches</h2>
     <form method="post" action="{{ url_for('main.cancel_review') }}" style="margin-left:auto;">

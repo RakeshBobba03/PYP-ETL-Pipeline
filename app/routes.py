@@ -10,9 +10,9 @@ import openpyxl
 from pathlib import Path
 from flask import (
     Blueprint, render_template, request, redirect,
-    url_for, flash, current_app, get_flashed_messages,
-    send_from_directory, session, abort, jsonify
+    url_for, current_app, send_from_directory, session, abort, jsonify
 )
+from urllib.parse import quote
 from werkzeug.utils import secure_filename
 from app import db
 from app.models import NewItem, MatchReview, MemberSubmission, Member
@@ -69,7 +69,6 @@ def dgraph_request_with_retry(url, json_data, headers, max_retries=3, base_delay
 @main_bp.route('/')
 def index():
     current_app.logger.info("[routes] Redirecting to upload page")
-    get_flashed_messages(with_categories=True)
     return redirect(url_for('main.upload_file'))
 
 @main_bp.route('/upload', methods=['GET', 'POST'])
@@ -106,11 +105,11 @@ def upload_file():
                 current_app.logger.info("[upload] Previous DB records cleared.")
 
             # Redirect to validation page instead of processing immediately
-            flash(f"File '{filename}' uploaded successfully. Please review the header mapping and data sample before processing.", "success")
             return redirect(url_for('main.validate_headers'))
 
         current_app.logger.warning("[upload] No valid file selected or invalid file type.")
-        flash("Please select a valid .xlsx, .xls or .csv file.", "danger")
+        # Redirect back to upload with error message
+        return redirect(url_for('main.upload_file', status='error', message='Please select a valid .xlsx, .xls or .csv file.'))
 
     current_app.logger.info("[upload] GET received. Rendering upload.html")
     return render_template('upload.html')
@@ -122,12 +121,10 @@ def validate_headers():
     file_path = session.get('file_path')
     
     if not filename or not file_path:
-        flash("No file uploaded. Please upload a file first.", "danger")
-        return redirect(url_for('main.upload_file'))
+        return redirect(url_for('main.upload_file', status='error', message='No file uploaded. Please upload a file first.'))
     
     if not os.path.exists(file_path):
-        flash("Uploaded file not found. Please upload again.", "danger")
-        return redirect(url_for('main.upload_file'))
+        return redirect(url_for('main.upload_file', status='error', message='Uploaded file not found. Please upload again.'))
     
     try:
         # Extract headers from file
@@ -188,37 +185,10 @@ def validate_headers():
         current_app.logger.error(f"Error validating headers: {e}")
         error_msg = str(e)
         
-        # Provide specific guidance for Excel file errors
-        if "Bad offset for central directory" in error_msg or "BadZipFile" in error_msg:
-            flash(
-                f"Excel file error: {error_msg}\n\n"
-                f"💡 This usually means the Excel file is corrupted. Please try:\n\n"
-                f"**Option 1: Re-save the file**\n"
-                f"1. Open the file in Microsoft Excel or Google Sheets\n"
-                f"2. Go to File → Save As\n"
-                f"3. Choose 'Excel Workbook (.xlsx)'\n"
-                f"4. Save and upload the new file\n\n"
-                f"**Option 2: Convert to CSV**\n"
-                f"1. Open the file in Excel/Google Sheets\n"
-                f"2. Go to File → Save As\n"
-                f"3. Choose 'CSV (Comma delimited) (*.csv)'\n"
-                f"4. Upload the CSV file instead", 
-                "danger"
-            )
-        elif "File is not a zip file" in error_msg or "not a zip file" in error_msg:
-            flash(
-                f"Excel file error: {error_msg}\n\n"
-                f"💡 This usually means the file extension doesn't match its actual format.\n\n"
-                f"Please try:\n"
-                f"1. Opening the file in Excel to verify it's actually an Excel file\n"
-                f"2. Re-saving it as .xlsx format\n"
-                f"3. Or converting it to CSV format", 
-                "danger"
-            )
-        else:
-            flash(f"Error validating file: {error_msg}", "danger")
+        # Log the error and redirect back to upload
+        current_app.logger.error(f"Error validating file: {error_msg}")
         
-        return redirect(url_for('main.upload_file'))
+        return redirect(url_for('main.upload_file', status='error', message=quote(f'Error validating file: {error_msg}')))
 
 @main_bp.route('/update_mapping', methods=['POST'])
 def update_mapping():
@@ -286,7 +256,6 @@ def update_mapping():
         session['updated_sample_data'] = sample_data
         
         # Redirect back to validation page with updated data
-        flash('Mapping updated successfully!', 'success')
         return redirect(url_for('main.validate_headers'))
         
     except Exception as e:
@@ -308,8 +277,7 @@ def process_validated_file():
     file_path = session.get('file_path')
     
     if not filename or not file_path:
-        flash("No file uploaded. Please upload a file first.", "danger")
-        return redirect(url_for('main.upload_file'))
+        return redirect(url_for('main.upload_file', status='error', message='No file uploaded. Please upload a file first.'))
     
     try:
         # Get custom mapping from session
@@ -352,30 +320,16 @@ def process_validated_file():
                 writer.writerow(['Row','Error'])
                 for err in val_errors:
                     writer.writerow([err['row'], err['error']])
-            flash(f"Some rows were skipped due to validation errors. See details on the review page.", "warning")
-
         current_app.logger.info(f"[process_validated_file] Successfully processed {count} valid items from {filename}")
-        flash(f"Uploaded and processed '{filename}' ({count} valid items). Ready for review.", "success")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
 
     except Exception as e:
         current_app.logger.error(f"[process_validated_file][error] {e}")
         error_msg = str(e)
         
-        # Provide helpful guidance for Excel file errors
-        if "File is not a zip file" in error_msg or "not a zip file" in error_msg or "BadZipFile" in error_msg:
-            flash(
-                f"Excel file error: {error_msg}\n\n"
-                f"💡 Tip: Try converting your Excel file to CSV format:\n"
-                f"1. Open the file in Excel\n"
-                f"2. Go to File → Save As\n"
-                f"3. Choose 'CSV (Comma delimited) (*.csv)'\n"
-                f"4. Upload the CSV file instead", 
-                "danger"
-            )
-        else:
-            flash(f"Processing failed: {e}", "danger")
-        return redirect(url_for('main.validate_headers'))
+        # Log the error and redirect back to validation
+        current_app.logger.error(f"Processing failed: {e}")
+        return redirect(url_for('main.validate_headers', status='error', message=quote(f'Processing failed: {str(e)}')))
 
 @main_bp.route('/download_etl_errors')
 def download_etl_errors():
@@ -383,8 +337,7 @@ def download_etl_errors():
     filename = session.get('etl_error_filename', 'ETL_Errors.csv')
     current_app.logger.info(f"[download_etl_errors] Download request. errors present: {bool(errors)}, filename: {filename}")
     if not errors or not filename:
-        flash("No error report available.", "danger")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
 
 @main_bp.route('/errors/<filename>')
@@ -461,8 +414,7 @@ def handle_review(item_id):
         current_app.logger.warning(f"[handle_review] Review item {item_id} not found or already handled.")
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': False, 'message': 'Review item not found or already handled.'})
-        flash("Review item not found or already handled.", "warning")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
 
     # Handle multiple canonical choices
     canonical_choices = request.form.getlist('canonical_choices')
@@ -518,9 +470,8 @@ def handle_review(item_id):
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': True, 'message': message})
         
-        # Only set flash message for non-AJAX requests
-        flash(message, "success")
-        return redirect(url_for('main.review_list'))
+        # Redirect back to review list
+        return redirect(url_for('main.review_list', status='success', message=message))
         
     except Exception as e:
         db.session.rollback()
@@ -531,8 +482,7 @@ def handle_review(item_id):
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': False, 'message': error_message})
         
-        flash(error_message, "error")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
 
 @main_bp.route('/reviews/ignore_review_item/<int:item_id>', methods=['POST'])
 def ignore_review_item(item_id):
@@ -542,8 +492,7 @@ def ignore_review_item(item_id):
         current_app.logger.warning(f"[ignore_review_item] Review item {item_id} not found or already handled.")
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': False, 'message': 'Review item not found or already handled.'})
-        flash("Review item not found or already handled.", "warning")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
 
     try:
         review.approved = False
@@ -557,8 +506,7 @@ def ignore_review_item(item_id):
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': True, 'message': message})
         
-        flash(message, "warning")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='success', message=message))
         
     except Exception as e:
         db.session.rollback()
@@ -569,8 +517,7 @@ def ignore_review_item(item_id):
         if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({'success': False, 'message': error_message})
         
-        flash(error_message, "error")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Review item not found or already handled.'))
 
 @main_bp.route('/reviews/batch_save_decisions', methods=['POST'])
 def batch_save_decisions():
@@ -590,18 +537,23 @@ def batch_save_decisions():
         db.session.add(review.new_item)
 
     db.session.commit()
-    flash(f"All {len(reviews)} items approved as NEW products/ingredients and ready to push to Dgraph.", "success")
     current_app.logger.info(f"[batch_save_decisions] Batch review decisions saved for {len(reviews)} items as NEW items.")
-    return redirect(url_for('main.review_list'))
+    return redirect(url_for('main.review_list', status='success', message=quote(f'All {len(reviews)} items approved as NEW products/ingredients and ready to push to Dgraph.')))
 
 @main_bp.route('/reviews/batch_approve_high_confidence', methods=['POST'])
 def batch_approve_high_confidence():
-    """Auto-approve items with high confidence matches (90%+)"""
+    """Auto-approve items with high confidence matches (80% to 95%)"""
+    from app.etl import get_fuzzy_match_threshold, get_auto_resolve_threshold
+    
+    fuzzy_threshold = get_fuzzy_match_threshold()  # 80%
+    auto_resolve_threshold = get_auto_resolve_threshold()  # 95%
+    
     high_confidence_reviews = MatchReview.query.join(NewItem) \
         .filter(
             MatchReview.approved.is_(None), 
             NewItem.ignored.is_(False),
-            MatchReview.score >= 90.0,
+            MatchReview.score >= fuzzy_threshold,
+            MatchReview.score < auto_resolve_threshold,  # Less than 95% (not auto-resolved)
             MatchReview.suggested_ext_id.isnot(None)
         ).all()
     
@@ -617,9 +569,9 @@ def batch_approve_high_confidence():
         approved_count += 1
 
     db.session.commit()
-    flash(f"Auto-approved {approved_count} high confidence items (90%+ match).", "success")
     current_app.logger.info(f"[batch_approve_high_confidence] Auto-approved {approved_count} high confidence items.")
-    return redirect(url_for('main.review_list'))
+    message = f'Auto-approved {approved_count} high confidence items ({fuzzy_threshold}% to {auto_resolve_threshold}% match).'
+    return redirect(url_for('main.review_list', status='success', message=quote(message)))
 
 @main_bp.route('/reviews/batch_ignore_all', methods=['POST'])
 def batch_ignore_all():
@@ -634,17 +586,15 @@ def batch_ignore_all():
         db.session.add(review.new_item)
 
     db.session.commit()
-    flash("All pending items have been ignored.", "warning")
     current_app.logger.info("[batch_ignore_all] All pending review items ignored.")
-    return redirect(url_for('main.review_list'))
+    return redirect(url_for('main.review_list', status='warning', message='All pending items have been ignored.'))
 
 @main_bp.route('/reviews/push', methods=['POST'])
 def push_to_dgraph():
     submission = MemberSubmission.query.order_by(MemberSubmission.id.desc()).first()
     if not submission:
         current_app.logger.warning("[push_to_dgraph] No submission found to push.")
-        flash("No submission found to push.", "warning")
-        return redirect(url_for('main.upload_file'))
+        return redirect(url_for('main.upload_file', status='warning', message='No submission found to push.'))
 
     url   = current_app.config.get('DGRAPH_URL')
     token = current_app.config.get('DGRAPH_API_TOKEN')
@@ -652,8 +602,7 @@ def push_to_dgraph():
     # Check if Dgraph is configured
     if not url or not token:
         current_app.logger.error("[push] Dgraph not configured - cannot push data")
-        flash("Dgraph is not configured. Please set DGRAPH_URL and DGRAPH_API_TOKEN environment variables.", "error")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message='Dgraph is not configured. Please set DGRAPH_URL and DGRAPH_API_TOKEN environment variables.'))
     
     headers = {"Content-Type": "application/json", "Dg-Auth": token}
     
@@ -665,8 +614,7 @@ def push_to_dgraph():
         current_app.logger.info("[push] Dgraph connectivity test successful")
     except Exception as e:
         current_app.logger.error(f"[push] Dgraph connectivity test failed: {e}")
-        flash(f"Dgraph is not accessible: {str(e)}. Please check your Dgraph instance and daily limits.", "error")
-        return redirect(url_for('main.review_list'))
+        return redirect(url_for('main.review_list', status='error', message=quote(f'Dgraph is not accessible: {str(e)}. Please check your Dgraph instance and daily limits.')))
 
     current_app.logger.info(f"[push] Starting push for submission: {submission.name}")
     members = Member.query.filter_by(submission_id=submission.id).all()
@@ -1307,5 +1255,4 @@ def cancel_review():
     db.session.commit()
     session.pop('etl_validation_errors', None)
     session.pop('etl_error_filename', None)
-    flash("Review cancelled. You can upload a new file now.", "info")
-    return redirect(url_for('main.upload_file'))
+    return redirect(url_for('main.upload_file', status='info', message='Review cancelled. You can upload a new file now.'))
