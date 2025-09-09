@@ -12,6 +12,29 @@ from flask import current_app
 from app import db
 from app.models import MemberSubmission, Member, NewItem, MatchReview
 
+def open_csv_with_encoding_detection(file_path, mode='r'):
+    """
+    Open a CSV file with automatic encoding detection.
+    Tries multiple encodings to handle various CSV file formats.
+    Returns the file handle and the encoding used.
+    """
+    encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+    
+    for encoding in encodings_to_try:
+        try:
+            f = open(file_path, mode=mode, encoding=encoding, newline='')
+            # Test read a small amount to verify encoding works
+            f.seek(0)
+            f.read(1024)
+            f.seek(0)
+            return f, encoding
+        except UnicodeDecodeError:
+            if 'f' in locals():
+                f.close()
+            continue
+    
+    raise Exception(f"Could not read CSV file with any of the attempted encodings: {encodings_to_try}")
+
 BATCH_SIZE = 1000
 # Configurable thresholds - Made more strict to prevent incorrect matches
 FUZZY_MATCH_THRESHOLD = float(os.getenv('FUZZY_MATCH_THRESHOLD', '85.0'))  # Increased from 80% to 85%
@@ -175,7 +198,10 @@ def fetch_member_offerings_from_dgraph():
             timeout=10
         )
         resp.raise_for_status()
-        data = resp.json().get("data", {})
+        resp_json = resp.json() if resp else {}
+        if resp_json is None:
+            resp_json = {}
+        data = resp_json.get("data", {})
         offerings = data.get('memberOfferings', [])
         
         # Create mapping of title to UID
@@ -302,8 +328,13 @@ def determine_member_offerings(member_data, mapping):
     offerings = []
     offerings_mapping = get_member_offerings_mapping()
     
+    current_app.logger.info(f"[determine_member_offerings] Member data keys: {list(member_data.keys())}")
+    current_app.logger.info(f"[determine_member_offerings] Mapping keys: {list(mapping.keys())}")
+    current_app.logger.info(f"[determine_member_offerings] Available offerings: {list(offerings_mapping.keys())}")
+    
     # Check each field that could indicate an offering
     for field_name, offering_info in offerings_mapping.items():
+        current_app.logger.debug(f"[determine_member_offerings] Checking offering field: {field_name}")
         # Special case for Manufacturing: check both manufacturingServices AND presence of products
         if field_name == 'manufacturingServices':
             manufacturing_detected = False
@@ -359,22 +390,60 @@ def determine_member_offerings(member_data, mapping):
                         })
                         break  # Found this offering, move to next
     
-    # Special case: if no offerings detected, add "No Offerings"
+    # Special case: if no offerings detected, don't add anything
+    # The "No Offerings" placeholder was causing Dgraph errors because the UID doesn't exist
+    # Instead, we'll just return an empty list and let the member be created without offerings
     if not offerings:
-        offerings.append({
-            'title': 'No Offerings',
-            'uid': '0x1e8595',
-            'source_field': 'none',
-            'source_value': 'No offerings detected'
-        })
+        current_app.logger.debug(f"[detect_member_offerings] No offerings detected for member, skipping offerings assignment")
     
     return offerings
 
 def get_member_offerings_from_cache(member_id):
-    """Get member offerings from the session cache"""
-    if hasattr(db.session, 'member_offerings_cache'):
-        return db.session.member_offerings_cache.get(member_id, [])
-    return []
+    """Get member offerings from the database or session cache"""
+    try:
+        from flask import current_app
+        current_app.logger.debug(f"[get_member_offerings_from_cache] Getting offerings for member ID: {member_id}")
+        
+        # First try to get from database
+        member = Member.query.get(member_id)
+        current_app.logger.debug(f"[get_member_offerings_from_cache] Member query result: {member}")
+        if member:
+            current_app.logger.debug(f"[get_member_offerings_from_cache] Member has member_offerings attribute: {hasattr(member, 'member_offerings')}")
+            if hasattr(member, 'member_offerings'):
+                current_app.logger.debug(f"[get_member_offerings_from_cache] Member.member_offerings value: {member.member_offerings}")
+                if member.member_offerings:
+                    current_app.logger.debug(f"[get_member_offerings_from_cache] Retrieved offerings from database for member {member_id}: {member.member_offerings}")
+                    return member.member_offerings
+            else:
+                current_app.logger.warning(f"[get_member_offerings_from_cache] Member {member_id} does not have member_offerings attribute - database column may not exist")
+        
+        # Fallback to session cache
+        if not hasattr(db.session, 'member_offerings_cache'):
+            current_app.logger.debug(f"[get_member_offerings_from_cache] No member_offerings_cache attribute on db.session")
+            return []
+        
+        cache = db.session.member_offerings_cache
+        current_app.logger.debug(f"[get_member_offerings_from_cache] Cache object: {cache} (type: {type(cache)})")
+        
+        if cache is None:
+            current_app.logger.debug(f"[get_member_offerings_from_cache] Cache is None")
+            return []
+        
+        if not hasattr(cache, 'get'):
+            current_app.logger.warning(f"[get_member_offerings_from_cache] Cache object has no 'get' method: {type(cache)}")
+            return []
+        
+        result = cache.get(member_id, [])
+        current_app.logger.debug(f"[get_member_offerings_from_cache] Retrieved offerings from cache for member {member_id}: {result} (type: {type(result)})")
+        return result
+        
+    except Exception as e:
+        try:
+            from flask import current_app
+            current_app.logger.error(f"[get_member_offerings_from_cache] ERROR getting offerings for member {member_id}: {e}", exc_info=True)
+        except:
+            pass  # In case we're not in Flask context
+        return []
 
 def map_headers_to_schema(headers):
     """
@@ -469,7 +538,6 @@ def validate_required_columns(headers, mapping):
     # Required fields for this injection process (as specified in requirements)
     required_fields = [
         'businessName',      # Required - business name
-        'contactFullName',   # Required - contact full name
         'contactEmail',      # Required - contact email
         'streetAddress1',    # Required - street address
         'city1',            # Required - city
@@ -529,7 +597,8 @@ def normalize_data_sample(file_path, headers, mapping, sample_size=10):
         ext = file_path.lower().rsplit('.', 1)[1]
         
         if ext == 'csv':
-            with open(file_path, encoding='utf-8', newline='') as f:
+            f, encoding = open_csv_with_encoding_detection(file_path)
+            try:
                 reader = csv.DictReader(f)
                 for i, row in enumerate(reader):
                     if i >= sample_size:
@@ -537,6 +606,8 @@ def normalize_data_sample(file_path, headers, mapping, sample_size=10):
                     
                     normalized_row = normalize_row_data(row, headers, mapping)
                     sample_data.append(normalized_row)
+            finally:
+                f.close()
                     
         elif ext in ['xlsx', 'xls']:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
@@ -868,7 +939,7 @@ def _process_file_content(filename, submission, custom_mapping=None):
     
     # Prepare reader + helper - process row by row to avoid memory issues
     if ext == 'csv':
-        f = open(fp, encoding='utf-8', newline='')
+        f, encoding = open_csv_with_encoding_detection(fp)
         reader = csv.DictReader(f)
         headers = reader.fieldnames or []
         
@@ -999,7 +1070,9 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
             current_app.logger.info(f"[etl] GraphQL Query: {gql}")
             resp = requests.post(url, json={"query": gql}, headers={"Content-Type": "application/json", "Dg-Auth": token}, timeout=10)
             resp.raise_for_status()
-            response_data = resp.json()
+            response_data = resp.json() if resp else {}
+            if response_data is None:
+                response_data = {}
             current_app.logger.info(f"[etl] Raw Dgraph response: {response_data}")
             data = response_data.get("data", {})
             current_app.logger.info(f"[etl] Canonical products: {len(data.get('products',[]))}, ingredients: {len(data.get('ingredients',[]))}, certifications: {len(data.get('certifications',[]))}, allergens: {len(data.get('allergens',[]))}")
@@ -1074,7 +1147,38 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
                 continue
             
             # Determine member offerings based on data presence
-            member_offerings = determine_member_offerings(row, custom_mapping or {})
+            # Use the full mapping (custom + auto-detected) for offerings detection
+            full_mapping = custom_mapping or {}
+            
+            # Add mappings for the specific service columns that exist in the CSV
+            service_column_mappings = {
+                'manufacturingServices': 'manufacturingServices',
+                'logisticalServices': 'logisticalServices', 
+                'labServices': 'laboratoryServices',
+                'startupFriendlyServices': 'startupFriendlyServices',
+                'suppliedPackaging': 'suppliedPackaging',
+                'deliveredIn': 'deliveredIn',
+                'designServices': 'designServices',
+                'legalServices': 'legalServices',
+                'marketingServices': 'marketingServices',
+                'regulatoryServices': 'regulatoryServices',
+                'consultingServices': 'consultingServices',
+                'facilityDetails': 'facilityDetails',
+                'suppliedEquipment': 'suppliedEquipment',
+                'ingredients': 'ingredients',
+                'products': 'products'  # Products also indicate manufacturing
+            }
+            
+            # Add mappings for any service columns that exist in the headers
+            for header in headers:
+                if header in service_column_mappings and header not in full_mapping:
+                    full_mapping[header] = {
+                        'schema_field': service_column_mappings[header],
+                        'confidence': 100,  # Direct match
+                        'original_header': header
+                    }
+            
+            member_offerings = determine_member_offerings(row, full_mapping)
             current_app.logger.info(f"[etl] Row {idx}: Member offerings detected: {[o['title'] for o in member_offerings]}")
             
             member = Member(
@@ -1089,8 +1193,10 @@ def _process_rows_generator(rows_generator, headers, get, submission, is_csv=Tru
             db.session.add(member)
             db.session.flush()
             
-            # Store member offerings for later use (when pushing to Dgraph)
-            # We'll store this in the session for now
+            # Store member offerings in the database for persistence
+            member.member_offerings = member_offerings
+            
+            # Also store in session cache for backward compatibility
             if not hasattr(db.session, 'member_offerings_cache'):
                 db.session.member_offerings_cache = {}
             db.session.member_offerings_cache[member.id] = member_offerings

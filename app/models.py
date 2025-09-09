@@ -54,6 +54,7 @@ class Member(db.Model):
     city1 = db.Column(db.String)
     country1 = db.Column(db.String)
     company_bio = db.Column(db.String)
+    member_offerings = db.Column(JSON, nullable=True)  # Store member offerings as JSON
     submission_id = db.Column(db.Integer, db.ForeignKey('member_submissions.id'), nullable=False)
     new_items = db.relationship('NewItem', backref='member', cascade="all, delete-orphan")
     

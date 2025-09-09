@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import timedelta
 
 class Config:
@@ -40,6 +41,9 @@ class Config:
     DGRAPH_TIMEOUT = int(os.environ.get('DGRAPH_TIMEOUT', '30'))
     DGRAPH_MAX_RETRIES = int(os.environ.get('DGRAPH_MAX_RETRIES', '3'))
     DGRAPH_RETRY_DELAY = int(os.environ.get('DGRAPH_RETRY_DELAY', '1'))
+    
+    # Logging settings
+    LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
 class DevelopmentConfig(Config):
     """Development configuration"""

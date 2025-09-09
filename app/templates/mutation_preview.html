@@ -182,6 +182,7 @@
     <div class="card" style="padding:2rem; text-align:center;">
       <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
         <form method="POST" action="{{ url_for('main.push_to_dgraph') }}" style="display: inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="btn primary">
             <i class="mdi mdi-rocket-launch"></i> Proceed with Submission
           </button>

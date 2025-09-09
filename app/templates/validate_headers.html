@@ -288,7 +288,10 @@ const schemaFields = {{ schema_fields|tojson }};
 // Update mapping when user changes field selections
 document.querySelectorAll('.field-mapping').forEach(select => {
   select.addEventListener('change', function() {
-    updateMapping();
+    // Add a small delay to ensure the change is registered
+    setTimeout(() => {
+      updateMapping();
+    }, 100);
   });
   
   // Ensure the selected value is visible on page load
@@ -320,30 +323,32 @@ function updateMapping() {
   
   console.log('Collected mapping:', mapping);
   
-  // Create a form to submit the mapping data
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = '{{ url_for("main.update_mapping") }}';
-  form.style.display = 'none';
-  
-  // Add CSRF token
+  // Use AJAX to submit the mapping data
   const csrfToken = document.getElementById('csrf-token-field').value;
-  const csrfInput = document.createElement('input');
-  csrfInput.type = 'hidden';
-  csrfInput.name = 'csrf_token';
-  csrfInput.value = csrfToken;
-  form.appendChild(csrfInput);
   
-  // Add mapping data
-  const mappingInput = document.createElement('input');
-  mappingInput.type = 'hidden';
-  mappingInput.name = 'mapping';
-  mappingInput.value = JSON.stringify(mapping);
-  form.appendChild(mappingInput);
-  
-  // Submit the form
-  document.body.appendChild(form);
-  form.submit();
+  fetch('{{ url_for("main.update_mapping") }}', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': csrfToken
+    },
+    body: JSON.stringify({
+      mapping: mapping
+    })
+  })
+  .then(response => {
+    if (response.ok) {
+      // Success - reload the page to show updated mapping
+      window.location.reload();
+    } else {
+      console.error('Failed to update mapping');
+      alert('Failed to update mapping. Please try again.');
+    }
+  })
+  .catch(error => {
+    console.error('Error updating mapping:', error);
+    alert('Error updating mapping. Please try again.');
+  });
 }
 
 function updateValidationStatus(validation) {

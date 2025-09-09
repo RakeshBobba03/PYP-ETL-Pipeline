@@ -7,20 +7,24 @@ import logging
 import time
 import json
 import openpyxl
+from datetime import datetime
 from pathlib import Path
 from flask import (
     Blueprint, render_template, request, redirect,
-    url_for, current_app, send_from_directory, session, abort, jsonify
+    url_for, current_app, send_from_directory, session, abort, jsonify, make_response
 )
 from urllib.parse import quote
 from werkzeug.utils import secure_filename
 from app import db
 from app.models import NewItem, MatchReview, MemberSubmission, Member, Product, Ingredient
-from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample, get_member_offerings_from_cache
+from app.etl import process_submission_file, map_headers_to_schema, validate_required_columns, normalize_data_sample, get_member_offerings_from_cache, open_csv_with_encoding_detection
+from app.logging_utils import logging_manager
+from app.error_utils import error_handler, ErrorCategory
+from app.report_utils import report_generator
 
 main_bp = Blueprint('main', __name__)
 
-UPLOAD_FOLDER = os.path.join(os.getcwd(), 'seed_data', 'new_submissions')
+UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')  # Change to any folder you want
 ALLOWED_EXTENSIONS = {'xlsx', 'xls', 'csv'}
 
 # Custom Jinja filters
@@ -49,18 +53,62 @@ def is_safe_filename(filename):
     except (ValueError, RuntimeError):
         return False
 
-def dgraph_request_with_retry(url, json_data, headers, max_retries=3, base_delay=1):
-    """Make Dgraph request with exponential backoff retry"""
+def dgraph_request_with_retry(url, json_data, headers, max_retries=3, base_delay=1, operation_id=None):
+    """Make Dgraph request with exponential backoff retry and enhanced error handling"""
     for attempt in range(max_retries):
         try:
+            # Track data usage for daily limit monitoring
+            data_size = error_handler.estimate_data_size(json_data)
+            error_handler.track_data_usage(data_size, "mutation")
+            
+            # Check daily limit before making request
+            limit_exceeded, usage_gb, limit_gb = error_handler.check_daily_limit()
+            if limit_exceeded:
+                error_msg = f"Daily limit exceeded: {usage_gb:.2f}GB / {limit_gb}GB"
+                current_app.logger.error(f"[dgraph] {error_msg}")
+                raise Exception(error_msg)
+            
             resp = requests.post(url, json=json_data, headers=headers, timeout=30)
             resp.raise_for_status()
+            
+            # Log successful mutation
+            response_data = resp.json()
+            if response_data is None:
+                response_data = {}
+            logging_manager.log_mutation(
+                mutation_type="dgraph_request",
+                payload=json_data,
+                response={"status": "success", "data": response_data},
+                dgraph_url=url,
+                headers=headers,
+                operation_id=operation_id
+            )
+            
             return resp
+            
         except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
+            # Handle error with categorization
+            error_info = error_handler.handle_error(
+                error=e,
+                context=f"Dgraph request (attempt {attempt + 1}/{max_retries})",
+                operation_id=operation_id,
+                retry_count=attempt,
+                max_retries=max_retries
+            )
+            
+            if not error_info["should_retry"] or attempt == max_retries - 1:
+                # Log final failure
+                logging_manager.log_mutation(
+                    mutation_type="dgraph_request",
+                    payload=json_data,
+                    response={"status": "error", "errors": [str(e)]},
+                    dgraph_url=url,
+                    headers=headers,
+                    operation_id=operation_id
+                )
                 raise e
             
-            delay = base_delay * (2 ** attempt)  # Exponential backoff
+            delay = error_info["retry_delay"]
             current_app.logger.warning(f"[dgraph] Request failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
             time.sleep(delay)
     
@@ -159,6 +207,10 @@ def upload_file():
 
         session.pop('etl_validation_errors', None)
         session.pop('etl_error_filename', None)
+        session.pop('custom_mapping', None)
+        session.pop('updated_mapping', None)
+        session.pop('updated_validation', None)
+        # Note: updated_sample_data is no longer stored in session
 
         if file and allowed_file(file.filename):
             filename = secure_filename(file.filename)
@@ -211,9 +263,13 @@ def validate_headers():
         headers = []
         
         if ext == 'csv':
-            with open(file_path, encoding='utf-8', newline='') as f:
+            f, encoding = open_csv_with_encoding_detection(file_path)
+            try:
                 reader = csv.reader(f)
                 headers = next(reader, [])
+                current_app.logger.info(f"[validate_headers] Successfully read CSV with encoding: {encoding}")
+            finally:
+                f.close()
         elif ext in ['xlsx', 'xls']:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
             sheet = wb.active
@@ -224,19 +280,17 @@ def validate_headers():
         # Check if we have updated mapping from session
         updated_mapping = session.get('updated_mapping')
         updated_validation = session.get('updated_validation')
-        updated_sample_data = session.get('updated_sample_data')
         
-        if updated_mapping and updated_validation and updated_sample_data:
+        if updated_mapping and updated_validation:
             # Use updated data from session
             mapping = updated_mapping
             validation = updated_validation
-            sample_data = updated_sample_data
+            # Regenerate sample data to avoid storing large data in session
+            sample_data = normalize_data_sample(file_path, headers, mapping, sample_size=10)
             unmapped = [h for h in headers if h not in mapping]
             
-            # Clear session data
-            session.pop('updated_mapping', None)
-            session.pop('updated_validation', None)
-            session.pop('updated_sample_data', None)
+            # Don't clear session data yet - keep it for potential refreshes
+            # Only clear when user proceeds to next step
         else:
             # Use automatic mapping
             mapping, unmapped = map_headers_to_schema(headers)
@@ -293,7 +347,10 @@ def update_mapping():
             try:
                 custom_mapping = json.loads(mapping_json)
             except json.JSONDecodeError:
-                return jsonify({'error': 'Invalid mapping data format'}), 400
+                if request.is_json:
+                    return jsonify({'error': 'Invalid mapping data format'}), 400
+                else:
+                    return redirect(url_for('main.validate_headers', status='error', message='Invalid mapping data format'))
         
         # Store custom mapping in session
         session['custom_mapping'] = custom_mapping
@@ -303,9 +360,13 @@ def update_mapping():
         headers = []
         
         if ext == 'csv':
-            with open(file_path, encoding='utf-8', newline='') as f:
+            f, encoding = open_csv_with_encoding_detection(file_path)
+            try:
                 reader = csv.reader(f)
                 headers = next(reader, [])
+                current_app.logger.info(f"[update_mapping] Successfully read CSV with encoding: {encoding}")
+            finally:
+                f.close()
         elif ext in ['xlsx', 'xls']:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
             sheet = wb.active
@@ -330,12 +391,26 @@ def update_mapping():
         sample_data = normalize_data_sample(file_path, headers, mapping, sample_size=10)
         
         # Store the updated data in session for the next page load
+        # Only store essential data to avoid cookie size limits
         session['updated_mapping'] = mapping
         session['updated_validation'] = validation
-        session['updated_sample_data'] = sample_data
+        # Don't store sample_data in session - it's too large and will be regenerated
         
-        # Redirect back to validation page with updated data
-        return redirect(url_for('main.validate_headers'))
+        # Return appropriate response based on request type
+        if request.is_json:
+            return jsonify({
+                'success': True,
+                'message': 'Mapping updated successfully',
+                'validation': {
+                    'is_valid': validation['is_valid'],
+                    'missing_fields': validation['missing_fields'],
+                    'total_headers': validation['total_headers'],
+                    'mapped_headers': validation['mapped_headers']
+                }
+            })
+        else:
+            # Redirect back to validation page with updated data
+            return redirect(url_for('main.validate_headers'))
         
     except Exception as e:
         current_app.logger.error(f"Error updating mapping: {e}")
@@ -343,11 +418,17 @@ def update_mapping():
         
         # Provide specific guidance for Excel file errors
         if "Bad offset for central directory" in error_msg or "BadZipFile" in error_msg:
-            return jsonify({
-                'error': 'Excel file is corrupted. Please re-save the file in Excel or convert to CSV format.'
-            }), 500
+            if request.is_json:
+                return jsonify({
+                    'error': 'Excel file is corrupted. Please re-save the file in Excel or convert to CSV format.'
+                }), 500
+            else:
+                return redirect(url_for('main.validate_headers', status='error', message='Excel file is corrupted. Please re-save the file in Excel or convert to CSV format.'))
         else:
-            return jsonify({'error': str(e)}), 500
+            if request.is_json:
+                return jsonify({'error': str(e)}), 500
+            else:
+                return redirect(url_for('main.validate_headers', status='error', message=str(e)))
 
 @main_bp.route('/process_validated_file', methods=['POST'])
 def process_validated_file():
@@ -370,6 +451,9 @@ def process_validated_file():
         session.pop('uploaded_file', None)
         session.pop('file_path', None)
         session.pop('custom_mapping', None)
+        session.pop('updated_mapping', None)
+        session.pop('updated_validation', None)
+        # Note: updated_sample_data is no longer stored in session
         
         # Handle results similar to original upload flow
         if count == 0:
@@ -485,7 +569,9 @@ def review_list():
             """
             product_response = requests.post(url, json={"query": product_query}, headers=headers, timeout=10)
             if product_response.status_code == 200:
-                product_data = product_response.json()
+                product_data = product_response.json() if product_response else {}
+                if product_data is None:
+                    product_data = {}
                 if product_data and 'data' in product_data:
                     for product in product_data['data'].get('queryProduct', []):
                         canonical_titles['product'][product['productID']] = product['title']
@@ -502,7 +588,9 @@ def review_list():
             """
             ingredient_response = requests.post(url, json={"query": ingredient_query}, headers=headers, timeout=10)
             if ingredient_response.status_code == 200:
-                ingredient_data = ingredient_response.json()
+                ingredient_data = ingredient_response.json() if ingredient_response else {}
+                if ingredient_data is None:
+                    ingredient_data = {}
                 if ingredient_data and 'data' in ingredient_data:
                     for ingredient in ingredient_data['data'].get('queryIngredients', []):
                         canonical_titles['ingredient'][ingredient['ingredientID']] = ingredient['title']
@@ -519,7 +607,9 @@ def review_list():
             """
             certification_response = requests.post(url, json={"query": certification_query}, headers=headers, timeout=10)
             if certification_response.status_code == 200:
-                certification_data = certification_response.json()
+                certification_data = certification_response.json() if certification_response else {}
+                if certification_data is None:
+                    certification_data = {}
                 if certification_data and 'data' in certification_data:
                     for certification in certification_data['data'].get('queryCertification', []):
                         canonical_titles['certification'][certification['certID']] = certification['title']
@@ -562,7 +652,7 @@ def review_list():
     
     # Get all companies that were created during ETL processing
     # This includes companies with auto-resolved items (no manual review needed)
-    all_etl_companies = Member.query.distinct().all()
+    all_etl_companies = Member.query.all()
     
     # Get companies that have items requiring manual review (for the summary)
     companies_with_reviewed_items = set()
@@ -818,8 +908,11 @@ def preview_mutations():
     valid_countries_schema = load_valid_countries_from_schema()
     
     def lookup_ref_preview(ref_type_query, var_name, title, id_field):
-        """Simplified lookup for preview - just return the structure without actual query"""
-        return {id_field: f"<{id_field}_placeholder>"}
+        """Lookup for preview - return actual ID from schema for countries"""
+        if ref_type_query == "queryMemberCountry" and title in valid_countries_schema:
+            return {id_field: valid_countries_schema[title]}
+        else:
+            return {id_field: f"<{id_field}_placeholder>"}
     
     for m in preview_members:
         biz = m.name or "(Unknown)"
@@ -902,11 +995,25 @@ def preview_mutations():
             
             # Add member offerings
             member_offerings = get_member_offerings_from_cache(m.id)
+            current_app.logger.info(f"[preview_mutations] Member '{biz}' (ID: {m.id}) offerings: {member_offerings}")
+            
+            # If no offerings found, try to get them from session cache or re-process
+            if not member_offerings:
+                # Try to get from session cache directly
+                if hasattr(db.session, 'member_offerings_cache') and db.session.member_offerings_cache:
+                    member_offerings = db.session.member_offerings_cache.get(m.id, [])
+                    current_app.logger.info(f"[preview_mutations] Retrieved offerings from session cache for member '{biz}': {member_offerings}")
+            
             if member_offerings:
                 offering_refs = []
                 for offering in member_offerings:
-                    offering_refs.append({"offeringID": offering['uid']})
-                member_input["memberOfferings"] = offering_refs
+                    if isinstance(offering, dict) and offering is not None and 'uid' in offering:
+                        offering_refs.append({"offeringID": offering['uid']})
+                if offering_refs:
+                    member_input["memberOfferings"] = offering_refs
+                    current_app.logger.info(f"[preview_mutations] Added {len(offering_refs)} offerings to member '{biz}'")
+            else:
+                current_app.logger.warning(f"[preview_mutations] No offerings found for member '{biz}' (ID: {m.id})")
             
             # Create the mutation structure
             mutation_preview = {
@@ -948,6 +1055,17 @@ def push_to_dgraph():
         return redirect(url_for('main.review_list', status='error', message='Dgraph is not configured. Please set DGRAPH_URL and DGRAPH_API_TOKEN environment variables.'))
     
     headers = {"Content-Type": "application/json", "Dg-Auth": token}
+    
+    # Generate operation ID for this push
+    operation_id = logging_manager._generate_log_id("push_to_dgraph")
+    
+    # Log push start
+    logging_manager.log_event("push_start", {
+        "submission_name": submission.name,
+        "submission_id": submission.id,
+        "dgraph_url": url,
+        "operation_id": operation_id
+    }, operation_id)
     
     # Test Dgraph connectivity first
     try:
@@ -999,10 +1117,16 @@ def push_to_dgraph():
             """
             v = {"in": [{"title": country_name}]}
             resp = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-            resp_json = resp.json()
+            resp_json = resp.json() if resp else {}
+            if resp_json is None:
+                resp_json = {}
             
-            if "errors" in resp_json:
-                error_msg = resp_json["errors"][0].get("message", "Unknown Dgraph error")
+            if "errors" in resp_json and resp_json["errors"]:
+                errors_list = resp_json["errors"] if isinstance(resp_json["errors"], list) else [resp_json["errors"]]
+                if errors_list[0] is not None and isinstance(errors_list[0], dict):
+                    error_msg = errors_list[0].get("message", "Unknown Dgraph error")
+                else:
+                    error_msg = str(errors_list[0]) if errors_list[0] is not None else "Unknown Dgraph error"
                 current_app.logger.error(f"[push] Failed to create country '{country_name}': {error_msg}")
                 return None
                 
@@ -1052,9 +1176,15 @@ def push_to_dgraph():
             resp = dgraph_request_with_retry(url, {"query": q, "variables": {"title": title}}, headers=headers)
             
             # Validate response structure
-            resp_json = resp.json()
-            if "errors" in resp_json:
-                error_msg = resp_json["errors"][0].get("message", "Unknown Dgraph error")
+            resp_json = resp.json() if resp else {}
+            if resp_json is None:
+                resp_json = {}
+            if "errors" in resp_json and resp_json["errors"]:
+                errors_list = resp_json["errors"] if isinstance(resp_json["errors"], list) else [resp_json["errors"]]
+                if errors_list[0] is not None and isinstance(errors_list[0], dict):
+                    error_msg = errors_list[0].get("message", "Unknown Dgraph error")
+                else:
+                    error_msg = str(errors_list[0]) if errors_list[0] is not None else "Unknown Dgraph error"
                 current_app.logger.error(f"[push] Dgraph query error for {ref_type_query}: {error_msg}")
                 # Return a special value to indicate Dgraph error vs "not found"
                 return {"error": error_msg}
@@ -1097,29 +1227,73 @@ def push_to_dgraph():
             # Use Python try/except to make each company atomic (skip if any error occurs)
             # Country lookup: required for every member
             if not m.country1:
-                results["errors"].append(f"Missing country for business '{biz}'—skipped.")
+                results["errors"].append({
+                    "type": "validation_error",
+                    "message": f"Missing country for business '{biz}'—skipped.",
+                    "business": biz,
+                    "field": "country1",
+                    "timestamp": datetime.now().isoformat()
+                })
                 current_app.logger.warning(f"[push] Skipping '{biz}' due to missing country.")
                 continue
             # Step 1: Check if country is valid according to schema
             if m.country1 not in valid_countries_schema:
-                results["errors"].append(f"Country '{m.country1}' is not a valid country in the schema for business '{biz}'—skipped.")
+                results["errors"].append({
+                    "type": "validation_error",
+                    "message": f"Country '{m.country1}' is not a valid country in the schema for business '{biz}'—skipped.",
+                    "business": biz,
+                    "field": "country1",
+                    "value": m.country1,
+                    "timestamp": datetime.now().isoformat()
+                })
                 current_app.logger.warning(f"[push] Skipping '{biz}' due to invalid country '{m.country1}'")
                 continue
             
             # Step 2: Check if country exists in Dgraph
-            country_ref = lookup_ref("queryMemberCountry", "country", m.country1, "countryID")
+            try:
+                current_app.logger.debug(f"[push] Looking up country '{m.country1}' for '{biz}'")
+                country_ref = lookup_ref("queryMemberCountry", "country", m.country1, "countryID")
+                current_app.logger.debug(f"[push] Country lookup result for '{biz}': {country_ref} (type: {type(country_ref)})")
+            except Exception as e:
+                current_app.logger.error(f"[push] ERROR looking up country '{m.country1}' for '{biz}': {e}", exc_info=True)
+                results["errors"].append({
+                    "type": "application_error",
+                    "message": f"Failed to lookup country '{m.country1}' for business '{biz}'—skipped.",
+                    "business": biz,
+                    "field": "country1",
+                    "value": m.country1,
+                    "error_details": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+                current_app.logger.warning(f"[push] Skipping '{biz}' due to country lookup error")
+                continue
             if country_ref is None:
                 # Country not found in Dgraph - try to create it
                 current_app.logger.info(f"[push] Country '{m.country1}' not found in Dgraph, attempting to create...")
                 country_ref = create_country_if_missing(m.country1)
                 if not country_ref:
-                    results["errors"].append(f"Failed to create country '{m.country1}' for business '{biz}'—skipped.")
+                    results["errors"].append({
+                        "type": "dgraph_error",
+                        "message": f"Failed to create country '{m.country1}' for business '{biz}'—skipped.",
+                        "business": biz,
+                        "field": "country1",
+                        "value": m.country1,
+                        "timestamp": datetime.now().isoformat()
+                    })
                     current_app.logger.warning(f"[push] Skipping '{biz}' due to failed country creation '{m.country1}'")
                     continue
                 elif isinstance(country_ref, dict) and "error" in country_ref:
                     # Dgraph error occurred during creation
                     error_msg = country_ref["error"]
-                    results["errors"].append(f"Dgraph error creating country '{m.country1}': {error_msg} - business '{biz}' skipped.")
+                    results["errors"].append({
+                        "type": "dgraph_error",
+                        "message": f"Dgraph error creating country '{m.country1}': {error_msg} - business '{biz}' skipped.",
+                        "business": biz,
+                        "field": "country1",
+                        "value": m.country1,
+                        "error_details": error_msg,
+                        "timestamp": datetime.now().isoformat()
+                    })
                     current_app.logger.warning(f"[push] Skipping '{biz}' due to Dgraph error creating country '{m.country1}': {error_msg}")
                     continue
                 else:
@@ -1127,7 +1301,15 @@ def push_to_dgraph():
             elif isinstance(country_ref, dict) and "error" in country_ref:
                 # Dgraph error occurred (e.g., daily limit reached)
                 error_msg = country_ref["error"]
-                results["errors"].append(f"Dgraph error for country '{m.country1}': {error_msg} - business '{biz}' skipped.")
+                results["errors"].append({
+                    "type": "dgraph_error",
+                    "message": f"Dgraph error for country '{m.country1}': {error_msg} - business '{biz}' skipped.",
+                    "business": biz,
+                    "field": "country1",
+                    "value": m.country1,
+                    "error_details": error_msg,
+                    "timestamp": datetime.now().isoformat()
+                })
                 current_app.logger.warning(f"[push] Skipping '{biz}' due to Dgraph error for country '{m.country1}': {error_msg}")
                 continue
             else:
@@ -1144,15 +1326,86 @@ def push_to_dgraph():
             }
             """
             current_app.logger.info(f"[push] Checking if '{biz}' exists in Dgraph…")
-            resp = requests.post(url, json={"query": q, "variables": {"name": biz}}, headers=headers)
-            node_list = resp.json().get("data", {}).get("queryMember", [])
+            try:
+                current_app.logger.debug(f"[push] Sending member existence query for '{biz}'")
+                resp = requests.post(url, json={"query": q, "variables": {"name": biz}}, headers=headers)
+                current_app.logger.debug(f"[push] Member existence response for '{biz}': status={resp.status_code if resp else 'None'}")
+                
+                if resp is None:
+                    current_app.logger.error(f"[push] Member existence response is None for '{biz}'")
+                    raise Exception("Member existence response is None")
+                
+                resp_json = resp.json() if resp else {}
+                current_app.logger.debug(f"[push] Member existence JSON for '{biz}': {resp_json} (type: {type(resp_json)})")
+                
+                if resp_json is None:
+                    current_app.logger.warning(f"[push] Member existence JSON is None for '{biz}', setting to empty dict")
+                    resp_json = {}
+                
+                # Safe navigation through response structure
+                data = resp_json.get("data", {}) if isinstance(resp_json, dict) else {}
+                current_app.logger.debug(f"[push] Member existence data for '{biz}': {data} (type: {type(data)})")
+                
+                node_list = data.get("queryMember", []) if isinstance(data, dict) else []
+                current_app.logger.debug(f"[push] Member existence node_list for '{biz}': {node_list} (type: {type(node_list)}, length: {len(node_list) if isinstance(node_list, list) else 'N/A'})")
+                
+            except Exception as e:
+                current_app.logger.error(f"[push] ERROR checking if member '{biz}' exists: {e}", exc_info=True)
+                results["errors"].append({
+                    "type": "application_error",
+                    "message": f"Failed to check if member '{biz}' exists in Dgraph—skipped.",
+                    "business": biz,
+                    "error_details": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+                current_app.logger.warning(f"[push] Skipping '{biz}' due to member existence check error")
+                continue
 
             if node_list:
                 current_app.logger.info(f"[push] Member '{biz}' exists, updating products/ingredients…")
-                node = node_list[0]
-                mem_id   = node["memberID"]
-                exist_ps = {p["title"]: p["productID"] for p in node["products"]}
-                exist_is = {i["title"]: i["ingredientID"] for i in node["ingredients"]}
+                try:
+                    node = node_list[0]
+                    current_app.logger.debug(f"[push] Existing member node for '{biz}': {node} (type: {type(node)})")
+                    
+                    mem_id = node.get("memberID") if isinstance(node, dict) else None
+                    current_app.logger.debug(f"[push] Member ID for '{biz}': {mem_id}")
+                    
+                    products = node.get("products", []) if isinstance(node, dict) else []
+                    current_app.logger.debug(f"[push] Existing products for '{biz}': {products} (type: {type(products)}, length: {len(products) if isinstance(products, list) else 'N/A'})")
+                    
+                    ingredients = node.get("ingredients", []) if isinstance(node, dict) else []
+                    current_app.logger.debug(f"[push] Existing ingredients for '{biz}': {ingredients} (type: {type(ingredients)}, length: {len(ingredients) if isinstance(ingredients, list) else 'N/A'})")
+                    
+                    exist_ps = {}
+                    if isinstance(products, list):
+                        for p in products:
+                            if isinstance(p, dict) and "title" in p and "productID" in p:
+                                exist_ps[p["title"]] = p["productID"]
+                            else:
+                                current_app.logger.warning(f"[push] Invalid product entry for '{biz}': {p}")
+                    
+                    exist_is = {}
+                    if isinstance(ingredients, list):
+                        for i in ingredients:
+                            if isinstance(i, dict) and "title" in i and "ingredientID" in i:
+                                exist_is[i["title"]] = i["ingredientID"]
+                            else:
+                                current_app.logger.warning(f"[push] Invalid ingredient entry for '{biz}': {i}")
+                    
+                    current_app.logger.debug(f"[push] Processed existing products for '{biz}': {exist_ps}")
+                    current_app.logger.debug(f"[push] Processed existing ingredients for '{biz}': {exist_is}")
+                    
+                except Exception as e:
+                    current_app.logger.error(f"[push] ERROR processing existing member data for '{biz}': {e}", exc_info=True)
+                    results["errors"].append({
+                        "type": "application_error",
+                        "message": f"Failed to process existing member data for '{biz}'—skipped.",
+                        "business": biz,
+                        "error_details": str(e),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    current_app.logger.warning(f"[push] Skipping '{biz}' due to existing member data processing error")
+                    continue
 
                 # Get all products and ingredients for this member
                 all_products = [ni for ni in m.new_items if ni.type=="product" and not ni.ignored]
@@ -1209,7 +1462,10 @@ def push_to_dgraph():
                         }
                         """
                         resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
-                        existing_products = resp.json().get("data", {}).get("queryProduct", [])
+                        resp_json = resp.json() if resp else {}
+                        if resp_json is None:
+                            resp_json = {}
+                        existing_products = resp_json.get("data", {}).get("queryProduct", [])
                         
                         if existing_products:
                             # Product exists in Dgraph - link it
@@ -1263,7 +1519,10 @@ def push_to_dgraph():
                         }
                         """
                         resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
-                        existing_ingredients = resp.json().get("data", {}).get("queryIngredients", [])
+                        resp_json = resp.json() if resp else {}
+                        if resp_json is None:
+                            resp_json = {}
+                        existing_ingredients = resp_json.get("data", {}).get("queryIngredients", [])
                         
                         if existing_ingredients:
                             # Ingredient exists in Dgraph - link it
@@ -1286,7 +1545,12 @@ def push_to_dgraph():
                     """
                     v = {"in": [{"title": t} for t in new_product_names]}
                     r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-                    arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
+                    r_json = r.json() if r else {}
+                    if r_json is None:
+                        r_json = {}
+                    if not isinstance(r_json, dict):
+                        r_json = {}
+                    arr = r_json.get("data", {}).get("addProduct", {}).get("product", [])
                     for pr in arr:
                         new_product_ids.append(pr["productID"])
                         # Add member association note
@@ -1304,7 +1568,12 @@ def push_to_dgraph():
                     """
                     v = {"in": [{"title": t} for t in new_ingredient_names]}
                     r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-                    arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
+                    r_json = r.json() if r else {}
+                    if r_json is None:
+                        r_json = {}
+                    if not isinstance(r_json, dict):
+                        r_json = {}
+                    arr = r_json.get("data", {}).get("addIngredients", {}).get("ingredients", [])
                     for ing in arr:
                         new_ingredient_ids.append(ing["ingredientID"])
                         # Add member association note
@@ -1321,8 +1590,10 @@ def push_to_dgraph():
                 offering_refs = []
                 if member_offerings:
                     for offering in member_offerings:
-                        offering_refs.append({"offeringID": offering['uid']})
-                    current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for existing member '{biz}': {[o['title'] for o in member_offerings]}")
+                        if isinstance(offering, dict) and offering is not None and 'uid' in offering:
+                            offering_refs.append({"offeringID": offering['uid']})
+                    if offering_refs:
+                        current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for existing member '{biz}': {[o.get('title', 'Unknown') for o in member_offerings if isinstance(o, dict) and o is not None]}")
                 
                 if all_product_ids or all_ingredient_ids or offering_refs:
                     mut = """
@@ -1386,8 +1657,16 @@ def push_to_dgraph():
                   }
                 }
                 """
-                resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
-                existing_products = resp.json().get("data", {}).get("queryProduct", [])
+                try:
+                    resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                    resp_json = resp.json() if resp else {}
+                    if resp_json is None:
+                        resp_json = {}
+                    existing_products = resp_json.get("data", {}).get("queryProduct", [])
+                except Exception as e:
+                    current_app.logger.warning(f"[push] Error checking if product '{ni.name}' exists for '{biz}': {e}")
+                    # Continue without this product
+                    continue
                 
                 if existing_products:
                     # Product already exists - reuse it
@@ -1433,8 +1712,16 @@ def push_to_dgraph():
                   }
                 }
                 """
-                resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
-                existing_ingredients = resp.json().get("data", {}).get("queryIngredients", [])
+                try:
+                    resp = requests.post(url, json={"query": q, "variables": {"title": ni.name}}, headers=headers)
+                    resp_json = resp.json() if resp else {}
+                    if resp_json is None:
+                        resp_json = {}
+                    existing_ingredients = resp_json.get("data", {}).get("queryIngredients", [])
+                except Exception as e:
+                    current_app.logger.warning(f"[push] Error checking if ingredient '{ni.name}' exists for '{biz}': {e}")
+                    # Continue without this ingredient
+                    continue
                 
                 if existing_ingredients:
                     # Ingredient already exists - reuse it
@@ -1475,8 +1762,18 @@ def push_to_dgraph():
                 }
                 """
                 v = {"in": [{"title": t} for t in new_product_names]}
-                r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-                arr = r.json().get("data", {}).get("addProduct", {}).get("product", [])
+                try:
+                    r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
+                    r_json = r.json() if r else {}
+                    if r_json is None:
+                        r_json = {}
+                    if not isinstance(r_json, dict):
+                        r_json = {}
+                    arr = r_json.get("data", {}).get("addProduct", {}).get("product", [])
+                except Exception as e:
+                    current_app.logger.warning(f"[push] Error creating products for '{biz}': {e}")
+                    # Continue without new products
+                    arr = []
                 for pr in arr:
                     new_product_ids.append(pr["productID"])
                     # Add member association note to avoid duplication
@@ -1493,8 +1790,18 @@ def push_to_dgraph():
                 }
                 """
                 v = {"in": [{"title": t} for t in new_ingredient_names]}
-                r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
-                arr = r.json().get("data", {}).get("addIngredients", {}).get("ingredients", [])
+                try:
+                    r = requests.post(url, json={"query": mut, "variables": v}, headers=headers)
+                    r_json = r.json() if r else {}
+                    if r_json is None:
+                        r_json = {}
+                    if not isinstance(r_json, dict):
+                        r_json = {}
+                    arr = r_json.get("data", {}).get("addIngredients", {}).get("ingredients", [])
+                except Exception as e:
+                    current_app.logger.warning(f"[push] Error creating ingredients for '{biz}': {e}")
+                    # Continue without new ingredients
+                    arr = []
                 for ing in arr:
                     new_ingredient_ids.append(ing["ingredientID"])
                     # Add member association note to avoid duplication
@@ -1504,14 +1811,23 @@ def push_to_dgraph():
 
             state_ref = None
             if hasattr(m, 'state1') and m.state1:
-                state_ref = lookup_ref("queryMemberStateOrProvince", "state", m.state1, "stateOrProvinceID")
+                try:
+                    state_ref = lookup_ref("queryMemberStateOrProvince", "state", m.state1, "stateOrProvinceID")
+                except Exception as e:
+                    current_app.logger.warning(f"[push] Error looking up state '{m.state1}' for '{biz}': {e}")
+                    # Continue without state
 
             # Build member input with validation to ensure no None values
+            current_app.logger.debug(f"[push] Building member input for '{biz}'")
+            current_app.logger.debug(f"[push] Country ref for '{biz}': {country_ref} (type: {type(country_ref)})")
+            current_app.logger.debug(f"[push] Street address for '{biz}': {m.street_address1} (type: {type(m.street_address1)})")
+            
             member_input = {
                 "businessName":   biz,
                 "country1":       country_ref,
                 "streetAddress1": m.street_address1 if (m.street_address1 and m.street_address1.strip()) else "Not provided",  # Required field
             }
+            current_app.logger.debug(f"[push] Initial member input for '{biz}': {member_input}")
             
             # Only add optional fields if they have valid values
             if m.contact_email and m.contact_email.strip():
@@ -1522,26 +1838,52 @@ def push_to_dgraph():
                 member_input["companyBio"] = m.company_bio
                 
             # Add products and ingredients - combine existing and new IDs
+            current_app.logger.debug(f"[push] Combining product IDs for '{biz}': existing={existing_product_ids}, new={new_product_ids}")
+            current_app.logger.debug(f"[push] Combining ingredient IDs for '{biz}': existing={existing_ingredient_ids}, new={new_ingredient_ids}")
+            
             all_product_ids = existing_product_ids + new_product_ids
             all_ingredient_ids = existing_ingredient_ids + new_ingredient_ids
             
+            current_app.logger.debug(f"[push] Final product IDs for '{biz}': {all_product_ids} (length: {len(all_product_ids)})")
+            current_app.logger.debug(f"[push] Final ingredient IDs for '{biz}': {all_ingredient_ids} (length: {len(all_ingredient_ids)})")
+            
             if all_product_ids:
                 member_input["products"] = [{"productID": pid} for pid in all_product_ids]
+                current_app.logger.debug(f"[push] Added products to member input for '{biz}': {member_input['products']}")
             if all_ingredient_ids:
                 member_input["ingredients"] = [{"ingredientID": iid} for iid in all_ingredient_ids]
+                current_app.logger.debug(f"[push] Added ingredients to member input for '{biz}': {member_input['ingredients']}")
             if state_ref:
                 member_input["stateOrProvince1"] = state_ref
             if hasattr(m, 'zip_code1') and m.zip_code1:
                 member_input["zipCode1"] = m.zip_code1
             
             # Add member offerings
-            member_offerings = get_member_offerings_from_cache(m.id)
-            if member_offerings:
-                offering_refs = []
-                for offering in member_offerings:
-                    offering_refs.append({"offeringID": offering['uid']})
-                member_input["memberOfferings"] = offering_refs
-                current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for '{biz}': {[o['title'] for o in member_offerings]}")
+            try:
+                current_app.logger.debug(f"[push] Getting member offerings for member ID {m.id} (business: '{biz}')")
+                member_offerings = get_member_offerings_from_cache(m.id)
+                current_app.logger.debug(f"[push] Retrieved member offerings: {member_offerings} (type: {type(member_offerings)})")
+                
+                if member_offerings:
+                    offering_refs = []
+                    for i, offering in enumerate(member_offerings):
+                        current_app.logger.debug(f"[push] Processing offering {i}: {offering} (type: {type(offering)})")
+                        if isinstance(offering, dict) and offering is not None and 'uid' in offering:
+                            offering_refs.append({"offeringID": offering['uid']})
+                            current_app.logger.debug(f"[push] Added offering ref: {offering['uid']}")
+                        else:
+                            current_app.logger.warning(f"[push] Skipping invalid offering {i}: {offering} (isinstance dict: {isinstance(offering, dict)}, is None: {offering is None}, has uid: {'uid' in offering if isinstance(offering, dict) else False})")
+                    
+                    if offering_refs:
+                        member_input["memberOfferings"] = offering_refs
+                        current_app.logger.info(f"[push] Adding {len(offering_refs)} member offerings for '{biz}': {[o.get('title', 'Unknown') for o in member_offerings if isinstance(o, dict) and o is not None]}")
+                    else:
+                        current_app.logger.warning(f"[push] No valid offering refs created for '{biz}'")
+                else:
+                    current_app.logger.debug(f"[push] No member offerings found for '{biz}'")
+            except Exception as e:
+                current_app.logger.error(f"[push] ERROR getting member offerings for '{biz}': {e}", exc_info=True)
+                # Continue without offerings
 
             mut = """
             mutation ($in: [AddMemberInput!]!) {
@@ -1550,14 +1892,70 @@ def push_to_dgraph():
               }
             }
             """
-            current_app.logger.info(f"[push] Member input for '{biz}': {member_input}")
-            r = requests.post(
-                url,
-                json={"query": mut, "variables": {"in": [member_input]}},
-                headers=headers
-            )
-            resp_json = r.json()
-            arr = resp_json.get("data", {}).get("addMember", {}).get("member", [])
+            current_app.logger.info(f"[push] Final member input for '{biz}': {member_input}")
+            current_app.logger.debug(f"[push] Member input type check for '{biz}': {type(member_input)}")
+            
+            # Validate that all required fields are present and not None
+            try:
+                if not member_input.get("businessName"):
+                    current_app.logger.error(f"[push] Missing businessName in member input for '{biz}'")
+                if not member_input.get("country1"):
+                    current_app.logger.error(f"[push] Missing country1 in member input for '{biz}'")
+                if not member_input.get("streetAddress1"):
+                    current_app.logger.error(f"[push] Missing streetAddress1 in member input for '{biz}'")
+                
+                # Check for None values in the input
+                for key, value in member_input.items():
+                    if value is None:
+                        current_app.logger.error(f"[push] None value found in member input for '{biz}': {key} = {value}")
+            except Exception as e:
+                current_app.logger.error(f"[push] ERROR validating member input for '{biz}': {e}", exc_info=True)
+            try:
+                current_app.logger.debug(f"[push] Sending mutation request for '{biz}' to {url}")
+                r = requests.post(
+                    url,
+                    json={"query": mut, "variables": {"in": [member_input]}},
+                    headers=headers
+                )
+                current_app.logger.debug(f"[push] Received response for '{biz}': status={r.status_code if r else 'None'}")
+                
+                # Detailed response parsing with logging
+                if r is None:
+                    current_app.logger.error(f"[push] Response object is None for '{biz}'")
+                    raise Exception("Response object is None")
+                
+                resp_json = r.json() if r else {}
+                current_app.logger.debug(f"[push] Parsed JSON response for '{biz}': {resp_json} (type: {type(resp_json)})")
+                
+                if resp_json is None:
+                    current_app.logger.warning(f"[push] Response JSON is None for '{biz}', setting to empty dict")
+                    resp_json = {}
+                if not isinstance(resp_json, dict):
+                    current_app.logger.warning(f"[push] Response JSON is not dict for '{biz}': {type(resp_json)}, setting to empty dict")
+                    resp_json = {}
+                
+                # Safe navigation through response structure
+                current_app.logger.debug(f"[push] Accessing response data for '{biz}'")
+                data = resp_json.get("data", {})
+                current_app.logger.debug(f"[push] Response data for '{biz}': {data} (type: {type(data)})")
+                
+                add_member_data = data.get("addMember", {}) if isinstance(data, dict) else {}
+                current_app.logger.debug(f"[push] AddMember data for '{biz}': {add_member_data} (type: {type(add_member_data)})")
+                
+                arr = add_member_data.get("member", []) if isinstance(add_member_data, dict) else []
+                current_app.logger.debug(f"[push] Member array for '{biz}': {arr} (type: {type(arr)}, length: {len(arr) if isinstance(arr, list) else 'N/A'})")
+                
+            except Exception as e:
+                current_app.logger.error(f"[push] ERROR creating member '{biz}': {e}", exc_info=True)
+                results["errors"].append({
+                    "type": "application_error",
+                    "message": f"Failed to create member '{biz}' due to: {e}",
+                    "business": biz,
+                    "error_details": str(e),
+                    "timestamp": datetime.now().isoformat()
+                })
+                current_app.logger.warning(f"[push] Skipping '{biz}' due to member creation error")
+                continue
             if arr:
                 results["members"].extend(arr)
                 current_app.logger.info(f"[push] Created new member '{biz}' in Dgraph")
@@ -1565,27 +1963,78 @@ def push_to_dgraph():
                 # Note: Products and ingredients are already added to results when created above
                 # No need to add them again here to avoid duplication
             else:
-                err = resp_json.get("errors", [{"message": "Unknown Dgraph error"}])
-                error_msg = err[0].get('message', 'Unknown Dgraph error')
-                results["errors"].append(
-                    f"Failed to create '{biz}': {error_msg}"
-                )
+                current_app.logger.warning(f"[push] No member array returned for '{biz}', checking for errors")
+                try:
+                    err = resp_json.get("errors", [{"message": "Unknown Dgraph error"}])
+                    current_app.logger.debug(f"[push] Error array for '{biz}': {err} (type: {type(err)})")
+                    
+                    if err and isinstance(err, list) and len(err) > 0:
+                        current_app.logger.debug(f"[push] First error for '{biz}': {err[0]} (type: {type(err[0])})")
+                        if err[0] is not None and isinstance(err[0], dict):
+                            error_msg = err[0].get('message', 'Unknown Dgraph error')
+                            current_app.logger.debug(f"[push] Extracted error message for '{biz}': {error_msg}")
+                        else:
+                            error_msg = str(err[0]) if err[0] is not None else 'Unknown Dgraph error'
+                            current_app.logger.debug(f"[push] Converted error to string for '{biz}': {error_msg}")
+                    else:
+                        error_msg = "Unknown Dgraph error"
+                        current_app.logger.debug(f"[push] Using default error message for '{biz}': {error_msg}")
+                except Exception as e:
+                    current_app.logger.error(f"[push] ERROR processing error response for '{biz}': {e}", exc_info=True)
+                    error_msg = f"Error processing response: {e}"
+                
+                results["errors"].append({
+                    "type": "dgraph_error",
+                    "message": f"Failed to create '{biz}': {error_msg}",
+                    "business": biz,
+                    "error_details": error_msg,
+                    "timestamp": datetime.now().isoformat()
+                })
                 current_app.logger.warning(f"[push] Failed to create '{biz}': {error_msg}")
                 current_app.logger.warning(f"[push] Full response: {resp_json}")
         except Exception as ex:
-            current_app.logger.warning(f"[push] Atomic rollback: failed to push '{biz}': {ex}")
-            results["errors"].append(
-                f"Failed to push '{biz}' due to: {ex} (skipped; no partial writes for this company)"
-            )
+            current_app.logger.error(f"[push] ATOMIC ROLLBACK: failed to push '{biz}': {ex}", exc_info=True)
+            
+            # Check if this is a NoneType error specifically
+            if "'NoneType' object has no attribute 'get'" in str(ex):
+                current_app.logger.error(f"[push] DETECTED NONETYPE ERROR for '{biz}': {ex}")
+                current_app.logger.error(f"[push] This is the specific error we're trying to catch and fix!")
+            
+            results["errors"].append({
+                "type": "application_error",
+                "message": f"Failed to push '{biz}' due to: {ex} (skipped; no partial writes for this company)",
+                "business": biz,
+                "error_details": str(ex),
+                "timestamp": datetime.now().isoformat()
+            })
             continue
 
+    # Store results in session for downloadable reports
+    session['last_push_results'] = results
+    session['last_push_errors'] = results["errors"]
+    session['last_created_products'] = results["products"]
+    session['last_created_ingredients'] = results["ingredients"]
+    
+    # Log push completion
+    logging_manager.log_event("push_complete", {
+        "submission_name": submission.name,
+        "submission_id": submission.id,
+        "operation_id": operation_id,
+        "members_created": len(results["members"]),
+        "products_created": len(results["products"]),
+        "ingredients_created": len(results["ingredients"]),
+        "errors_count": len(results["errors"]),
+        "success": len(results["errors"]) == 0
+    }, operation_id)
+    
     return render_template(
         'push_summary.html',
         submission=submission,
         members=results["members"],
         products=results["products"],
         ingredients=results["ingredients"],
-        errors=results["errors"]
+        errors=results["errors"],
+        operation_id=operation_id
     )
 
 @main_bp.route('/reviews/cancel', methods=['POST'])
@@ -1602,65 +2051,117 @@ def cancel_review():
 
 @main_bp.route('/export_results_csv')
 def export_results_csv():
-    """Export push results as CSV file"""
+    """Export push results as CSV file (legacy route - now redirects to new reports)"""
     submission = MemberSubmission.query.order_by(MemberSubmission.id.desc()).first()
     if not submission:
         current_app.logger.warning("[export_results_csv] No submission found to export.")
         return redirect(url_for('main.upload_file', status='warning', message='No submission found to export.'))
     
+    # Redirect to new processed rows report
+    return redirect(url_for('main.download_processed_rows_csv', submission_id=submission.id))
+
+@main_bp.route('/download_processed_rows_csv/<int:submission_id>')
+def download_processed_rows_csv(submission_id):
+    """Download processed_rows.csv report"""
     try:
-        # Get all data for the submission
-        members = Member.query.filter_by(submission_id=submission.id).all()
+        csv_content = report_generator.generate_processed_rows_csv(submission_id)
+        submission = MemberSubmission.query.get(submission_id)
+        filename = f"{submission.name}_processed_rows.csv" if submission else f"submission_{submission_id}_processed_rows.csv"
         
-        # Create CSV content
+        current_app.logger.info(f"[download_processed_rows_csv] Downloaded processed rows CSV for submission {submission_id}")
+        return report_generator.create_csv_response(csv_content, filename)
+        
+    except Exception as e:
+        current_app.logger.error(f"[download_processed_rows_csv] Error: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error generating processed rows CSV: {str(e)}'))
+
+@main_bp.route('/download_errors_csv/<int:submission_id>')
+def download_errors_csv(submission_id):
+    """Download errors.csv report"""
+    try:
+        # Get push errors from session or database if available
+        push_errors = session.get('last_push_errors', [])
+        csv_content = report_generator.generate_errors_csv(submission_id, push_errors)
+        submission = MemberSubmission.query.get(submission_id)
+        filename = f"{submission.name}_errors.csv" if submission else f"submission_{submission_id}_errors.csv"
+        
+        current_app.logger.info(f"[download_errors_csv] Downloaded errors CSV for submission {submission_id}")
+        return report_generator.create_csv_response(csv_content, filename)
+        
+    except Exception as e:
+        current_app.logger.error(f"[download_errors_csv] Error: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error generating errors CSV: {str(e)}'))
+
+@main_bp.route('/download_created_nodes_csv/<int:submission_id>')
+def download_created_nodes_csv(submission_id):
+    """Download created_nodes.csv report"""
+    try:
+        # Get created nodes from session or database if available
+        created_products = session.get('last_created_products', [])
+        created_ingredients = session.get('last_created_ingredients', [])
+        csv_content = report_generator.generate_created_nodes_csv(submission_id, created_products, created_ingredients)
+        submission = MemberSubmission.query.get(submission_id)
+        filename = f"{submission.name}_created_nodes.csv" if submission else f"submission_{submission_id}_created_nodes.csv"
+        
+        current_app.logger.info(f"[download_created_nodes_csv] Downloaded created nodes CSV for submission {submission_id}")
+        return report_generator.create_csv_response(csv_content, filename)
+        
+    except Exception as e:
+        current_app.logger.error(f"[download_created_nodes_csv] Error: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error generating created nodes CSV: {str(e)}'))
+
+@main_bp.route('/download_all_reports/<int:submission_id>')
+def download_all_reports(submission_id):
+    """Download all three CSV reports as a zip file"""
+    try:
+        import zipfile
         import io
-        output = io.StringIO()
-        writer = csv.writer(output)
         
-        # Write header
-        writer.writerow([
-            'Submission Name', 'Business Name', 'Item Type', 'Item Name', 
-            'Decision', 'Matched Canonical ID', 'Score', 'Created At'
-        ])
+        # Get push results from session
+        push_results = session.get('last_push_results', {})
+        reports = report_generator.generate_all_reports(submission_id, push_results)
         
-        # Write data rows
-        for member in members:
-            for item in member.new_items:
-                # Determine decision type
-                if item.ignored:
-                    decision = 'Ignored'
-                elif item.resolved and item.matched_canonical_id:
-                    decision = 'Matched to Existing'
-                elif not item.resolved:
-                    decision = 'Created as New'
-                else:
-                    decision = 'Unknown'
-                
-                writer.writerow([
-                    submission.name,
-                    member.name,
-                    item.type.title(),
-                    item.name,
-                    decision,
-                    item.matched_canonical_id or '',
-                    f"{item.score:.2f}" if item.score else '',
-                    item.member.submission.created_at.strftime('%Y-%m-%d %H:%M:%S') if item.member.submission.created_at else ''
-                ])
+        # Create zip file in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for report_type, csv_content in reports.items():
+                zip_file.writestr(f"{report_type}.csv", csv_content)
         
-        # Prepare response
-        output.seek(0)
-        csv_content = output.getvalue()
-        output.close()
+        zip_buffer.seek(0)
         
         # Create response
-        from flask import make_response
-        response = make_response(csv_content)
-        response.headers['Content-Type'] = 'text/csv'
-        response.headers['Content-Disposition'] = f'attachment; filename="{submission.name}_results.csv"'
+        submission = MemberSubmission.query.get(submission_id)
+        filename = f"{submission.name}_all_reports.zip" if submission else f"submission_{submission_id}_all_reports.zip"
         
-        current_app.logger.info(f"[export_results_csv] Exported {len(members)} members with their items to CSV")
+        response = make_response(zip_buffer.getvalue())
+        response.headers['Content-Type'] = 'application/zip'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        current_app.logger.info(f"[download_all_reports] Downloaded all reports for submission {submission_id}")
         return response
         
     except Exception as e:
-        current_app.logger.error(f"[export_results_csv] Error exporting CSV: {e}")
-        return redirect(url_for('main.upload_file', status='error', message=f'Error exporting CSV: {str(e)}'))
+        current_app.logger.error(f"[download_all_reports] Error: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error generating all reports: {str(e)}'))
+
+@main_bp.route('/system_status')
+def system_status():
+    """View system status including daily usage and error statistics"""
+    try:
+        # Get daily usage info
+        daily_usage = error_handler.get_daily_usage_info()
+        
+        # Get error summary
+        error_summary = error_handler.get_error_summary(hours=24)
+        
+        # Get recent logs
+        recent_logs = logging_manager.get_recent_logs(hours=24)
+        
+        return render_template('system_status.html',
+                             daily_usage=daily_usage,
+                             error_summary=error_summary,
+                             recent_logs=recent_logs[:10])  # Show last 10 logs
+        
+    except Exception as e:
+        current_app.logger.error(f"[system_status] Error: {e}")
+        return redirect(url_for('main.upload_file', status='error', message=f'Error loading system status: {str(e)}'))

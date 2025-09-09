@@ -1,0 +1,165 @@
+{# app/templates/system_status.html #}
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="container" style="max-width:1200px; margin-top:2rem;">
+
+    <div class="card" style="padding:2rem; margin-bottom:2rem;">
+      <h1 style="margin-bottom:1rem; color: var(--primary);">
+        <i class="mdi mdi-monitor-dashboard"></i> System Status
+      </h1>
+      
+      <p style="margin-bottom:1rem; color: var(--muted);">
+        Monitor system health, daily usage, and error statistics
+      </p>
+    </div>
+
+    <!-- Daily Usage Status -->
+    <div class="card" style="padding:2rem; margin-bottom:2rem;">
+      <h2 style="margin-bottom:1rem; color: var(--primary);">
+        <i class="mdi mdi-chart-line"></i> Daily Usage ({{ daily_usage.date }})
+      </h2>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <div style="background: rgba(74, 124, 89, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(74, 124, 89, 0.3);">
+          <h3 style="margin: 0 0 0.5rem 0; color: var(--primary);">Data Usage</h3>
+          <p style="margin: 0; font-size: 1.5rem; font-weight: bold; color: var(--text);">
+            {{ daily_usage.usage_gb }}GB / {{ daily_usage.limit_gb }}GB
+          </p>
+          <p style="margin: 0.5rem 0 0 0; color: var(--muted); font-size: 0.9rem;">
+            {{ daily_usage.percentage }}% of daily limit
+          </p>
+        </div>
+        
+        <div style="background: rgba(33, 150, 243, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(33, 150, 243, 0.3);">
+          <h3 style="margin: 0 0 0.5rem 0; color: var(--info);">Operations</h3>
+          <p style="margin: 0; font-size: 1.5rem; font-weight: bold; color: var(--text);">
+            {{ daily_usage.operations }}
+          </p>
+          <p style="margin: 0.5rem 0 0 0; color: var(--muted); font-size: 0.9rem;">
+            Total operations today
+          </p>
+        </div>
+        
+        <div style="background: rgba(40, 167, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(40, 167, 69, 0.3);">
+          <h3 style="margin: 0 0 0.5rem 0; color: var(--success);">Mutations</h3>
+          <p style="margin: 0; font-size: 1.5rem; font-weight: bold; color: var(--text);">
+            {{ daily_usage.mutations }}
+          </p>
+          <p style="margin: 0.5rem 0 0 0; color: var(--muted); font-size: 0.9rem;">
+            Data mutations sent
+          </p>
+        </div>
+        
+        <div style="background: rgba(255, 193, 7, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(255, 193, 7, 0.3);">
+          <h3 style="margin: 0 0 0.5rem 0; color: var(--warning);">Queries</h3>
+          <p style="margin: 0; font-size: 1.5rem; font-weight: bold; color: var(--text);">
+            {{ daily_usage.queries }}
+          </p>
+          <p style="margin: 0.5rem 0 0 0; color: var(--muted); font-size: 0.9rem;">
+            Data queries sent
+          </p>
+        </div>
+      </div>
+      
+      {% if daily_usage.percentage > 80 %}
+        <div style="background: rgba(220, 53, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(220, 53, 69, 0.3);">
+          <p style="margin: 0; color: var(--danger);">
+            <i class="mdi mdi-alert-circle"></i>
+            <strong>Warning:</strong> Approaching daily limit ({{ daily_usage.percentage }}%). Consider reducing data volume or waiting until tomorrow.
+          </p>
+        </div>
+      {% elif daily_usage.percentage > 60 %}
+        <div style="background: rgba(255, 193, 7, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(255, 193, 7, 0.3);">
+          <p style="margin: 0; color: var(--warning);">
+            <i class="mdi mdi-information"></i>
+            <strong>Notice:</strong> {{ daily_usage.percentage }}% of daily limit used. Monitor usage to avoid hitting the limit.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Error Summary -->
+    <div class="card" style="padding:2rem; margin-bottom:2rem;">
+      <h2 style="margin-bottom:1rem; color: var(--primary);">
+        <i class="mdi mdi-alert-circle"></i> Error Summary (Last 24 Hours)
+      </h2>
+      
+      {% if error_summary.total_errors > 0 %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+          {% for category, count in error_summary.error_counts.items() %}
+            <div style="background: rgba(220, 53, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(220, 53, 69, 0.3);">
+              <h3 style="margin: 0 0 0.5rem 0; color: var(--danger);">{{ category.title() }}</h3>
+              <p style="margin: 0; font-size: 1.5rem; font-weight: bold; color: var(--text);">{{ count }}</p>
+            </div>
+          {% endfor %}
+        </div>
+        
+        <div style="background: var(--bg); padding: 1rem; border-radius: 6px; border: 1px solid var(--border);">
+          <h3 style="margin: 0 0 1rem 0; color: var(--text);">Recent Errors</h3>
+          {% for error in error_summary.recent_errors %}
+            <div style="margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(220, 53, 69, 0.05); border-radius: 4px;">
+              <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+                <strong>{{ error.timestamp }}</strong> - {{ error.category }}: {{ error.error_message[:100] }}{% if error.error_message|length > 100 %}...{% endif %}
+              </p>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="background: rgba(40, 167, 69, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(40, 167, 69, 0.3);">
+          <p style="margin: 0; color: var(--success);">
+            <i class="mdi mdi-check-circle"></i>
+            <strong>No errors</strong> in the last 24 hours. System is running smoothly.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Recent Activity Logs -->
+    <div class="card" style="padding:2rem; margin-bottom:2rem;">
+      <h2 style="margin-bottom:1rem; color: var(--primary);">
+        <i class="mdi mdi-history"></i> Recent Activity (Last 10 Events)
+      </h2>
+      
+      {% if recent_logs %}
+        <div style="background: var(--bg); padding: 1rem; border-radius: 6px; border: 1px solid var(--border);">
+          {% for log in recent_logs %}
+            <div style="margin-bottom: 1rem; padding: 1rem; background: rgba(74, 124, 89, 0.05); border-radius: 4px; border-left: 4px solid var(--primary);">
+              <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 0.5rem;">
+                <h4 style="margin: 0; color: var(--primary);">{{ log.event_type.title() }}</h4>
+                <span style="color: var(--muted); font-size: 0.9rem;">{{ log.timestamp }}</span>
+              </div>
+              <p style="margin: 0; color: var(--text); font-size: 0.9rem;">
+                <strong>Operation ID:</strong> {{ log.operation_id }}<br>
+                <strong>Summary:</strong> {{ log.data.get('summary', 'No summary available') }}
+              </p>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="background: rgba(108, 117, 125, 0.1); padding: 1rem; border-radius: 6px; border: 1px solid rgba(108, 117, 125, 0.3);">
+          <p style="margin: 0; color: var(--muted);">
+            <i class="mdi mdi-information"></i>
+            No recent activity logs found.
+          </p>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="card" style="padding:2rem; text-align:center;">
+      <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+        <a href="{{ url_for('main.upload_file') }}" class="btn primary">
+          <i class="mdi mdi-upload"></i> Upload New File
+        </a>
+        <a href="{{ url_for('main.review_list') }}" class="btn">
+          <i class="mdi mdi-eye"></i> View Reviews
+        </a>
+        <button onclick="location.reload()" class="btn">
+          <i class="mdi mdi-refresh"></i> Refresh Status
+        </button>
+      </div>
+    </div>
+
+  </div>
+{% endblock %}

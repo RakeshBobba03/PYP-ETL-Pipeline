@@ -85,14 +85,32 @@
 
       </div>
 
-      <div style="display: flex; gap: 1rem; justify-content: center; margin-top:2rem;">
-        <a href="{{ url_for('main.export_results_csv') }}" class="btn accent">
-          <i class="mdi mdi-download"></i> Export Results CSV
+      <div style="display: flex; gap: 1rem; justify-content: center; margin-top:2rem; flex-wrap: wrap;">
+        <a href="{{ url_for('main.download_processed_rows_csv', submission_id=submission.id) }}" class="btn accent">
+          <i class="mdi mdi-download"></i> Processed Rows CSV
         </a>
-        <a href="{{ url_for('main.upload_file') }}" class="btn accent">
+        <a href="{{ url_for('main.download_errors_csv', submission_id=submission.id) }}" class="btn accent">
+          <i class="mdi mdi-alert-circle"></i> Errors CSV
+        </a>
+        <a href="{{ url_for('main.download_created_nodes_csv', submission_id=submission.id) }}" class="btn accent">
+          <i class="mdi mdi-plus-circle"></i> Created Nodes CSV
+        </a>
+        <a href="{{ url_for('main.download_all_reports', submission_id=submission.id) }}" class="btn primary">
+          <i class="mdi mdi-archive"></i> All Reports (ZIP)
+        </a>
+        <a href="{{ url_for('main.upload_file') }}" class="btn">
           <i class="mdi mdi-arrow-left"></i> Back to Upload
         </a>
       </div>
+      
+      {% if operation_id %}
+      <div style="margin-top: 1rem; padding: 1rem; background: rgba(74, 124, 89, 0.1); border-radius: 6px; border: 1px solid rgba(74, 124, 89, 0.3); text-align: center;">
+        <p style="margin: 0; color: var(--primary); font-size: 0.9rem;">
+          <i class="mdi mdi-information"></i>
+          <strong>Operation ID:</strong> {{ operation_id }} - Use this ID to track logs and troubleshoot issues
+        </p>
+      </div>
+      {% endif %}
 
     </div>
   </div>

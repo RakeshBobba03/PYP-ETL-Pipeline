@@ -23,6 +23,14 @@ def create_app(config_name=None):
     from app.config import config
     app.config.from_object(config[config_name])
     
+    # Configure logging
+    import logging
+    log_level = getattr(logging, app.config.get('LOG_LEVEL', 'INFO'), logging.INFO)
+    app.logger.setLevel(log_level)
+    
+    # Also set the root logger level to ensure all logs are captured
+    logging.getLogger().setLevel(log_level)
+    
     # Initialize extensions
     db.init_app(app)
     csrf.init_app(app)
